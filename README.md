@@ -1,4 +1,9 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+# Deflow-grayscale-main
+=======
+>>>>>>> 6dbb3e9 (Added create dataset script)
 # DeFlow: Learning Complex Image Degradations from Unpaired Data with Conditional Flows
 Official implementation of the paper *DeFlow: Learning Complex Image Degradations from Unpaired Data with Conditional Flows*  
 
@@ -192,6 +197,10 @@ To pre-generate the downsampled images that are used as conditional features by 
 }
 ```
 
+<<<<<<< HEAD
 =======
 # Deflow-grayscale-main
 >>>>>>> 17b2855 (Initial commit)
+=======
+>>>>>>> e88e4aa (Initial commit)
+>>>>>>> 6dbb3e9 (Added create dataset script)

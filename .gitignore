@@ -1,8 +1,14 @@
 /cluster_logs/*
 /experiments/*
+<<<<<<< HEAD
 /results/*
 /trained_models/*
 /README.md/
+=======
+/datasets/*
+/results/*
+/trained_models/*
+>>>>>>> 6dbb3e9 (Added create dataset script)
 *.ipynb
 /.vscode/
 *_delete_*
