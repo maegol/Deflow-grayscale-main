@@ -1,11 +1,14 @@
 /cluster_logs/*
 /experiments/*
 <<<<<<< HEAD
+<<<<<<< HEAD
 /results/*
 /trained_models/*
 /README.md/
 =======
 /datasets/*
+=======
+>>>>>>> 876543d (Added create dataset script)
 /results/*
 /trained_models/*
 >>>>>>> 6dbb3e9 (Added create dataset script)
