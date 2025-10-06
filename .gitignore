@@ -1,8 +1,8 @@
 /cluster_logs/*
 /experiments/*
-/datasets/*
 /results/*
 /trained_models/*
+/README.md/
 *.ipynb
 /.vscode/
 *_delete_*
