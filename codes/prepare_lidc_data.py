@@ -28,7 +28,7 @@ WINDOW_MIN, WINDOW_MAX = -1200, 600
 IMAGE_SIZE = 512
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
-OUTPUT_DIR = "/mnt/home_liu/degradation/method_3/dataset"
+OUTPUT_DIR = "/mnt/home_liu/degradation/method_4/dataset"
 
 # 1. Query all scans and group by patient
 
