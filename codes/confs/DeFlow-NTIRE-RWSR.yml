@@ -1,10 +1,9 @@
-#### general settings
-name: DeFlow-NTIRE-RWSR
+name: DeFlow-gray
 use_tb_logger: true
 model: SRFL_Glow
 distortion: sr
 scale: 4
-gpu_ids: [0,] # should be equal to $CUDA_VISIBLE_DEVICES
+gpu_ids: [2,] # should be equal to $CUDA_VISIBLE_DEVICES
 
 
 #### datasets
@@ -12,12 +11,12 @@ datasets:
   train:
     name: NTIRE-RWSR
     mode: LQGT_multiclass 
-    dataroot_GT: [../datasets/NTIRE-RWSR/Corrupted-tr-y/4x/, 
-                  ../datasets/NTIRE-RWSR/Corrupted-tr-x/1x/]
-    dataroot_LQ: [../datasets/NTIRE-RWSR/Corrupted-tr-y/16x/,
-                  ../datasets/NTIRE-RWSR/Corrupted-tr-x/4x/]
+    dataroot_GT: [../datasets/Final_dataset/TrainB/1x/, 
+                  ../datasets/Final_dataset/TrainB/4x/]
+    dataroot_LQ: [../datasets/Final_dataset/TrainA/1x,
+                  ../datasets/Final_dataset/TrainA/4x]
     quant: 32
-    n_workers: 3  # per GPU
+    n_workers: 4  # per GPU
     batch_size: 8
     GT_size: 160
     balanced: true
@@ -25,15 +24,15 @@ datasets:
     use_shuffle: true
     use_flip: true
     use_crop: true
-    color: RGB
+    color: GRAY
 
   val:
     name: NTIRE-RWSR
     mode: LQGT_multiclass 
-    dataroot_GT: [../datasets/NTIRE-RWSR/track1-valid-gt/4x/, 
-                  ../datasets/NTIRE-RWSR/Corrupted-va-x/1x/]
-    dataroot_LQ: [../datasets/NTIRE-RWSR/track1-valid-gt/16x/, 
-                  ../datasets/NTIRE-RWSR/Corrupted-va-x/4x/]
+    dataroot_GT: [../datasets/Final_dataset/ValB/1x/, 
+                  ../datasets/Final_dataset/ValB/4x/]
+    dataroot_LQ: [../datasets/Final_dataset/ValA/1x/, 
+                  ../datasets/Final_dataset/ValA/4x/]
     preload: False # set true to load images into ram for faster training
     center_crop_hr_size: 160
     quant: 32
@@ -42,8 +41,8 @@ datasets:
 #### network structure
 network_G:
   which_model_G: RRDBGlowNet
-  in_nc: 3
-  out_nc: 3
+  in_nc: 1
+  out_nc: 1
   nf: 64
   nb: 23
   upscale: 4
@@ -74,8 +73,8 @@ network_G:
 
 #### path
 path:
-  root: /srv/beegfs02/scratch/data_aim2019/data/STValentin/ 
-  pretrain_model_G: /srv/beegfs02/scratch/data_aim2019/data/STValentin/models/RRDB_PSNR_x4.pth #/srv/beegfs02/scratch/data_aim2019/data/STValentin/models/SrgDf2kRRDB23X4Qn32_K16_L3_sp_CondAffineSeparatedAndCond_FlowNoAff2_n200000_fullDSNoRot_lr25e-5s05s075s09s095_RrdbD05_RRDBStack4_latest_G.pth #
+  root: /mnt/home_liu/degradation/method_4/Deflow-grayscale-main/
+  pretrain_model_G: /mnt/home_liu/degradation/method_4/Deflow-grayscale-main/codes/models/modules/RRDBGlowNet_arch.py #/srv/beegfs02/scratch/data_aim2019/data/STValentin/models/SrgDf2kRRDB23X4Qn32_K16_L3_sp_CondAffineSeparatedAndCond_FlowNoAff2_n200000_fullDSNoRot_lr25e-5s05s075s09s095_RrdbD05_RRDBStack4_latest_G.pth #
   strict_load: true
   resume_state: auto
 
