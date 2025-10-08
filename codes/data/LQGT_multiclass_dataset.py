@@ -72,11 +72,7 @@ class LQGTMulticlassDataset(data.Dataset):
             assert paths_GT, 'Error: GT path is empty.'
             assert paths_LQ, 'Error: LQ path is empty on the fly downsampling not yet supported.'
             # print(len(paths_GT), self.paths_GT[:10])
-            if paths_LQ and paths_GT:
-                assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
-            import os
-
-            # --- after you have paths_LQ and paths_GT built ---
+             # --- after you have paths_LQ and paths_GT built ---
 
             # If equal length, nothing to do
             if len(paths_LQ) != len(paths_GT):
@@ -105,6 +101,9 @@ class LQGTMulticlassDataset(data.Dataset):
             else:
             # lengths equal: proceed as before
                 pass
+            if paths_LQ and paths_GT:
+                assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
+            import os
 
             # limit to n_max images per class if specified
             n_max = opt.get('n_max', None)
