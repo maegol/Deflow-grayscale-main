@@ -74,6 +74,37 @@ class LQGTMulticlassDataset(data.Dataset):
             # print(len(paths_GT), self.paths_GT[:10])
             if paths_LQ and paths_GT:
                 assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
+            import os
+
+            # --- after you have paths_LQ and paths_GT built ---
+
+            # If equal length, nothing to do
+            if len(paths_LQ) != len(paths_GT):
+                # Try to match by basename (filename without extension)
+                gt_by_name = {os.path.splitext(os.path.basename(p))[0]: p for p in paths_GT}
+                matched_LQ = []
+                matched_GT = []
+
+                for p in paths_LQ:
+                    name = os.path.splitext(os.path.basename(p))[0]
+                    if name in gt_by_name:
+                        matched_LQ.append(p)
+                        matched_GT.append(gt_by_name[name])
+
+                if len(matched_LQ) > 0:
+                 # Use matched pairs (preserves order of LQ list where match found)
+                    paths_LQ = matched_LQ
+                    paths_GT = matched_GT
+                    print(f"[Dataset] Matched {len(paths_LQ)} LQ-GT pairs by filename (basename).")
+                else:
+                    # Fallback: pair by truncation to the minimum length
+                    min_len = min(len(paths_LQ), len(paths_GT))
+                    paths_LQ = paths_LQ[:min_len]
+                    paths_GT = paths_GT[:min_len]
+                    print(f"[Dataset] No basename matches found. Truncated to min length = {min_len} pairs.")
+            else:
+            # lengths equal: proceed as before
+                pass
 
             # limit to n_max images per class if specified
             n_max = opt.get('n_max', None)
