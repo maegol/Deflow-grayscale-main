@@ -4,7 +4,7 @@ import torch.utils.data as data
 import data.util as util
 from data import random_crop, center_crop, random_flip, random_rotation, imread
 import matlablike_resize
-
+import os
 def getEnv(name): import os; return True if name in os.environ.keys() else False
 
 class LQGTMulticlassDataset(data.Dataset):
@@ -103,7 +103,7 @@ class LQGTMulticlassDataset(data.Dataset):
                 pass
             if paths_LQ and paths_GT:
                 assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
-            import os
+    
 
             # limit to n_max images per class if specified
             n_max = opt.get('n_max', None)
