@@ -6,12 +6,15 @@ Read images from source_dir, create downsampled images at requested scales
 (using your existing load_at_multiple_scales function), and save single-channel
 grayscale images to target_dir/<scale>x/ preserving filenames.
 
-Saves images as true single-channel files using Pillow ('L' mode).
+This version optionally enforces a fixed GT size (GT_size). If --gt_size is
+given, the script will ensure:
+  - images saved in target_dir/1x/ are exactly GT_size x GT_size
+  - images saved in target_dir/<s>x/ are exactly (GT_size // s) x (GT_size // s)
+Resizing uses Pillow with sensible resampling choices.
 """
 import os
 import argparse
 import sys
-
 from tqdm import tqdm
 import numpy as np
 from PIL import Image
@@ -32,9 +35,8 @@ def to_grayscale_uint8(img: np.ndarray) -> np.ndarray:
     Returns:
       uint8 2D numpy array in range 0..255
     """
-    # Validate ndarray
+    # Convert PIL image to numpy if necessary
     if not isinstance(img, np.ndarray):
-        # If load_at_multiple_scales returns a PIL Image or something else, convert
         img = np.array(img)
 
     # Squeeze singleton channel
@@ -77,15 +79,51 @@ def save_grayscale_pil(gray_uint8: np.ndarray, out_path: str):
     pil.save(out_path)
 
 
+def pil_resize_grayscale(gray_uint8: np.ndarray, size: int, upsample_resample=Image.BICUBIC, downsample_resample=Image.LANCZOS):
+    """
+    Resize a 2D uint8 grayscale image to (size, size) using Pillow with
+    intelligent resampling selection depending on up/down-sampling.
+    Returns resized 2D uint8 numpy array.
+    """
+    if size <= 0:
+        raise ValueError("size must be >= 1")
+    if gray_uint8.ndim != 2:
+        raise ValueError("pil_resize_grayscale expects 2D array")
+
+    h, w = gray_uint8.shape
+    if (h, w) == (size, size):
+        return gray_uint8
+
+    pil = Image.fromarray(gray_uint8, mode='L')
+    # choose resample: use LANCZOS for downsample, BICUBIC for upsample
+    if size < min(h, w):
+        resample = downsample_resample
+    else:
+        resample = upsample_resample
+
+    pil_resized = pil.resize((size, size), resample=resample)
+    return np.array(pil_resized)
+
+
+def parse_args():
+    p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument('-source_dir', required=True, help='path to directory containing HR images')
+    p.add_argument('-target_dir', required=True, help='path to target directory')
+    p.add_argument('-scales', nargs='+',  type=int, default=[1, 4], help='scales to downsample to')
+    p.add_argument('--gt_size', type=int, default=None,
+                   help='If set, enforce GT size for 1x images; LQ sizes will be gt_size//scale (min 1)')
+    p.add_argument('--out_ext', type=str, default=None,
+                   help='Output extension/format (e.g. .png). If not set, preserve input filename extension.')
+    return p.parse_args()
+
+
 def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-source_dir', required=True, help='path to directory containing HR images')
-    parser.add_argument('-target_dir', required=True, help='path to target directory')
-    parser.add_argument('-scales', nargs='+',  type=int, default=[1, 4], help='scales to downsample to')
-    args = parser.parse_args()
+    args = parse_args()
 
     source_dir = args.source_dir
     scales = args.scales
+    gt_size = args.gt_size
+    out_ext = args.out_ext
 
     # prepare output directories
     scale_dirs = []
@@ -113,14 +151,35 @@ def main():
             tqdm.write(f"Warning: number of returned images ({len(images)}) "
                        f"!= number of scales ({len(scale_dirs)}) for {fn}. Truncating/padding as needed.")
 
-        for img, out_dir in zip(images, scale_dirs):
+        for img, out_dir, scale in zip(images, scale_dirs, scales):
             try:
+                # convert to grayscale 2D uint8
                 gray = to_grayscale_uint8(img)
             except Exception as e:
                 tqdm.write(f"Skipping {fn} for {out_dir}: cannot convert to grayscale: {e}")
                 continue
 
-            out_path = os.path.join(out_dir, fn)
+            # If GT size enforcement is requested, compute desired size for this scale
+            if gt_size is not None:
+                if scale == 1:
+                    desired = gt_size
+                else:
+                    desired = max(1, gt_size // scale)
+                if gray.shape[:2] != (desired, desired):
+                    try:
+                        gray = pil_resize_grayscale(gray, desired)
+                        tqdm.write(f"Resized {fn} for scale {scale}x -> {desired}x{desired}")
+                    except Exception as e:
+                        tqdm.write(f"Failed resizing {fn} for scale {scale}x to {desired}: {e}")
+                        continue
+
+            # Build output path: preserve extension unless out_ext specified
+            base_name, ext = os.path.splitext(fn)
+            save_ext = out_ext if out_ext is not None else ext
+            if not save_ext.startswith('.'):
+                save_ext = '.' + save_ext
+            out_path = os.path.join(out_dir, base_name + save_ext)
+
             try:
                 save_grayscale_pil(gray, out_path)
             except Exception as e:
