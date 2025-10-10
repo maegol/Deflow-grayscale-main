@@ -5,6 +5,65 @@ import data.util as util
 from data import random_crop, center_crop, random_flip, random_rotation, imread
 import matlablike_resize
 import os
+import cv2
+
+def _to_gray_if_needed(img):
+    """Return a 2D uint8 grayscale numpy array regardless of input format."""
+    if not isinstance(img, np.ndarray):
+        img = np.array(img)
+    # squeeze channel dim if single-channel stored as HxWx1
+    if img.ndim == 3 and img.shape[2] == 1:
+        img = img.squeeze(axis=2)
+    # if RGB/RGBA -> convert to gray using Rec.601
+    if img.ndim == 3 and img.shape[2] >= 3:
+        # OpenCV expects BGR; if loaded via cv2 it's BGR, if PIL->numpy it's RGB.
+        # We do a neutral conversion using channels as-is (assuming RGB order).
+        img = img[..., :3].astype(np.float32)
+        gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
+        gray = np.clip(gray, 0, 255).round().astype(np.uint8)
+        return gray
+    # if already 2D
+    if img.ndim == 2:
+        # ensure uint8
+        if img.dtype != np.uint8:
+            if np.issubdtype(img.dtype, np.floating):
+                maxv = float(np.nanmax(img)) if img.size else 0.0
+                if maxv <= 1.0 + 1e-8:
+                    img = (np.clip(img, 0.0, 1.0) * 255.0).round().astype(np.uint8)
+                else:
+                    img = np.clip(img, 0, 255).round().astype(np.uint8)
+            else:
+                img = np.clip(img, 0, 255).astype(np.uint8)
+        return img
+    raise ValueError(f"Unsupported image shape: {getattr(img, 'shape', None)}")
+def _enforce_fixed_sizes(lq_img, gt_img, GT_size, scale):
+    """
+    Ensure gt_img is (GT_size, GT_size) and lq_img is (GT_size//scale, GT_size//scale).
+    Both outputs are 2D uint8 grayscale numpy arrays.
+    """
+    # convert to grayscale arrays
+    gt = _to_gray_if_needed(gt_img)
+    lq = _to_gray_if_needed(lq_img)
+
+    desired_gt = int(GT_size)
+    desired_lq = max(1, int(GT_size) // int(scale))
+
+    # Resize GT if needed (use cubic for up/down)
+    if gt.shape[:2] != (desired_gt, desired_gt):
+        gt = cv2.resize(gt, (desired_gt, desired_gt), interpolation=cv2.INTER_CUBIC)
+
+    # Resize LQ if needed (use area for downsampling)
+    if lq.shape[:2] != (desired_lq, desired_lq):
+        # if lq is larger than desired, use INTER_AREA, else BICUBIC
+        if lq.shape[0] > desired_lq or lq.shape[1] > desired_lq:
+            interp = cv2.INTER_AREA
+        else:
+            interp = cv2.INTER_CUBIC
+        lq = cv2.resize(lq, (desired_lq, desired_lq), interpolation=interp)
+
+    return lq, gt
+
+
 def getEnv(name): import os; return True if name in os.environ.keys() else False
 
 class LQGTMulticlassDataset(data.Dataset):
@@ -186,6 +245,24 @@ class LQGTMulticlassDataset(data.Dataset):
             LQ_path = None
             raise RuntimeError("on-the-fly downsampling not implemented")
 
+        GT_size = self.opt['datasets'][self.phase].get('GT_size', None)
+        scale = int(self.opt.get('scale', 1))
+
+        if GT_size is not None:
+            try:
+                lq_img, gt_img = _enforce_fixed_sizes(lq_img, gt_img, GT_size, scale)
+            except Exception as e:
+                # if something unexpected, fallback to safest behavior: try converting to gray and resizing minimally
+                print(f"[Dataset] Warning: enforce_fixed_sizes failed for index {index}, err: {e}. Attempting fallback.")
+                gt = _to_gray_if_needed(gt_img)
+                lq = _to_gray_if_needed(lq_img)
+                # fallback naive resize to expected shapes (wrapped in try/except)
+                try:
+                    gt = cv2.resize(gt, (GT_size, GT_size), interpolation=cv2.INTER_CUBIC)
+                    lq = cv2.resize(lq, (max(1, GT_size//scale), max(1, GT_size//scale)), interpolation=cv2.INTER_AREA)
+                    lq_img, gt_img = lq, gt
+                except Exception as e2:
+                    raise RuntimeError(f"[Dataset] Fatal: couldn't normalize sample sizes: {e2}")
         if self.scale == None:
             self.scale = hr.shape[1] // lr.shape[1]
         

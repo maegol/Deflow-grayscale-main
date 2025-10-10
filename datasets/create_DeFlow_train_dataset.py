@@ -22,7 +22,65 @@ from PIL import Image
 # make sure your project path is correct for importing data.util
 sys.path.insert(0, '../codes')
 from data.util import is_image_file, load_at_multiple_scales
+import cv2
+import numpy as np
 
+def _to_gray_if_needed(img):
+    """Return a 2D uint8 grayscale numpy array regardless of input format."""
+    if not isinstance(img, np.ndarray):
+        img = np.array(img)
+    # squeeze channel dim if single-channel stored as HxWx1
+    if img.ndim == 3 and img.shape[2] == 1:
+        img = img.squeeze(axis=2)
+    # if RGB/RGBA -> convert to gray using Rec.601
+    if img.ndim == 3 and img.shape[2] >= 3:
+        # OpenCV expects BGR; if loaded via cv2 it's BGR, if PIL->numpy it's RGB.
+        # We do a neutral conversion using channels as-is (assuming RGB order).
+        img = img[..., :3].astype(np.float32)
+        gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
+        gray = np.clip(gray, 0, 255).round().astype(np.uint8)
+        return gray
+    # if already 2D
+    if img.ndim == 2:
+        # ensure uint8
+        if img.dtype != np.uint8:
+            if np.issubdtype(img.dtype, np.floating):
+                maxv = float(np.nanmax(img)) if img.size else 0.0
+                if maxv <= 1.0 + 1e-8:
+                    img = (np.clip(img, 0.0, 1.0) * 255.0).round().astype(np.uint8)
+                else:
+                    img = np.clip(img, 0, 255).round().astype(np.uint8)
+            else:
+                img = np.clip(img, 0, 255).astype(np.uint8)
+        return img
+    raise ValueError(f"Unsupported image shape: {getattr(img, 'shape', None)}")
+
+def _enforce_fixed_sizes(lq_img, gt_img, GT_size, scale):
+    """
+    Ensure gt_img is (GT_size, GT_size) and lq_img is (GT_size//scale, GT_size//scale).
+    Both outputs are 2D uint8 grayscale numpy arrays.
+    """
+    # convert to grayscale arrays
+    gt = _to_gray_if_needed(gt_img)
+    lq = _to_gray_if_needed(lq_img)
+
+    desired_gt = int(GT_size)
+    desired_lq = max(1, int(GT_size) // int(scale))
+
+    # Resize GT if needed (use cubic for up/down)
+    if gt.shape[:2] != (desired_gt, desired_gt):
+        gt = cv2.resize(gt, (desired_gt, desired_gt), interpolation=cv2.INTER_CUBIC)
+
+    # Resize LQ if needed (use area for downsampling)
+    if lq.shape[:2] != (desired_lq, desired_lq):
+        # if lq is larger than desired, use INTER_AREA, else BICUBIC
+        if lq.shape[0] > desired_lq or lq.shape[1] > desired_lq:
+            interp = cv2.INTER_AREA
+        else:
+            interp = cv2.INTER_CUBIC
+        lq = cv2.resize(lq, (desired_lq, desired_lq), interpolation=interp)
+
+    return lq, gt
 
 def to_grayscale_uint8(img: np.ndarray) -> np.ndarray:
     """
