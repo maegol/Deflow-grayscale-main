@@ -167,19 +167,35 @@ class LQGTMulticlassDataset(data.Dataset):
         else:  # downsampling on-the-fly
             LQ_path = None
             raise RuntimeError("on-the-fly downsampling not implemented")
+        
+        #GT_size = self.opt['datasets'][self.phase].get('GT_size', None)
+        #---------------------------------------------------------------
+        # Safe retrieval of GT_size with multiple fallbacks
+        GT_size = None
 
-        GT_size = self.opt['datasets'][self.phase].get('GT_size', None)
+        # 1) Prefer dataset-scoped options if stored on the object
+        if hasattr(self, 'dataset_opt') and isinstance(self.dataset_opt, dict):
+            GT_size = self.dataset_opt.get('GT_size', None)
+
+        # 2) Then try to use self.phase with global opt if available
+        if GT_size is None and hasattr(self, 'opt') and isinstance(self.opt, dict):
+            phase = getattr(self, 'phase', None)
+            if phase is None:
+                # Try to infer phase from dataset_opt if present
+                if hasattr(self, 'dataset_opt') and isinstance(self.dataset_opt, dict):
+                    phase = self.dataset_opt.get('phase', 'train')
+                else:
+                    phase = 'train'
+            GT_size = self.opt.get('datasets', {}).get(phase, {}).get('GT_size', None)
+
+        # 3) Final fallback: check for top-level GT_size
+        if GT_size is None and hasattr(self, 'opt') and isinstance(self.opt, dict):
+            GT_size = self.opt.get('GT_size', None)
+
+        #---------------------------------------------------------------
         scale = int(self.opt.get('scale', 1))
 
         if GT_size is not None:
-            try:
-                lq_img, gt_img = _enforce_fixed_sizes(lq_img, gt_img, GT_size, scale)
-            except Exception as e:
-                # if something unexpected, fallback to safest behavior: try converting to gray and resizing minimally
-                print(f"[Dataset] Warning: enforce_fixed_sizes failed for index {index}, err: {e}. Attempting fallback.")
-                gt = _to_gray_if_needed(gt_img)
-                lq = _to_gray_if_needed(lq_img)
-                # fallback naive resize to expected shapes (wrapped in try/except)
                 try:
                     gt = cv2.resize(gt, (GT_size, GT_size), interpolation=cv2.INTER_CUBIC)
                     lq = cv2.resize(lq, (max(1, GT_size//scale), max(1, GT_size//scale)), interpolation=cv2.INTER_AREA)
