@@ -172,8 +172,10 @@ def parse_args():
                    help='If set, enforce GT size for 1x images; LQ sizes will be gt_size//scale (min 1)')
     p.add_argument('--out_ext', type=str, default=None,
                    help='Output extension/format (e.g. .png). If not set, preserve input filename extension.')
-    p.add_argument('--nomalize', type=bool, default= True, help='Normalize output size')
-    p.add_argument('--normalize_only', type=bool, default= False, help='Call Normalize function and exit')
+    p.add_argument('--normalize', action='store_true',
+                   help='After creating grayscale dataset, normalize image sizes (make same dims per scale using max size).')
+    p.add_argument('--normalize_only', action='store_true',
+                   help='Only run normalization on an existing target_dir (skip dataset creation).')
     return p.parse_args()
 
 
