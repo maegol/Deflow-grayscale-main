@@ -3,7 +3,7 @@ use_tb_logger: true
 model: SRFL_Glow
 distortion: sr
 scale: 4
-gpu_ids: [2,] # should be equal to $CUDA_VISIBLE_DEVICES
+gpu_ids: [0,] # should be equal to $CUDA_VISIBLE_DEVICES
 
 
 #### datasets
