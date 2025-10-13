@@ -150,98 +150,103 @@ class LQGTMulticlassDataset(data.Dataset):
             if (self.GT_env is None) or (self.LQ_env is None):
                 self._init_lmdb()
 
-        # get GT image
+        # get GT image path & image (hr) and LQ image (lr)
         GT_path = self.paths_GT[index]
-        if self.preloaded: # use preloaded images
+        if self.preloaded:  # use preloaded images
             hr = self.GT_imgs[index]
         else:
             hr = imread(GT_path)
 
-        # get LQ image
         if self.paths_LQ:
             LQ_path = self.paths_LQ[index]
-            if self.preloaded: # use preloaded images
+            if self.preloaded:
                 lr = self.LQ_imgs[index]
             else:
                 lr = imread(LQ_path)
-        else:  # downsampling on-the-fly
+        else:
             LQ_path = None
             raise RuntimeError("on-the-fly downsampling not implemented")
-        
-        #GT_size = self.opt['datasets'][self.phase].get('GT_size', None)
-        #---------------------------------------------------------------
-        #---------------------------------------------------------------
-        # Safe retrieval of GT_size with multiple fallbacks
-        GT_size = None
 
-        # 1) Prefer dataset-scoped options if stored on the object
+        # --- normalize image layout to CHW (C,H,W) early on ---
+        # handle grayscale HxW -> 1xHxW, HWC -> CHW, CHW keep as-is
+        def ensure_chw(img):
+            if isinstance(img, np.ndarray):
+                if img.ndim == 2:
+                    # H x W -> 1 x H x W
+                    return img[np.newaxis, :, :]
+                if img.ndim == 3:
+                    # detect HWC if last dim is channel count 1 or 3
+                    if img.shape[2] in (1, 3):
+                        return np.transpose(img, (2, 0, 1))
+                    # otherwise assume it's already CHW
+                    return img
+            # if it's not a numpy array, just return it (imread should return np.ndarray)
+            return img
+
+        try:
+            hr = ensure_chw(hr)
+            lr = ensure_chw(lr)
+        except Exception as e:
+            raise RuntimeError(f"[Dataset] Failed to standardize image layout for index {index}, GT_path={GT_path}, LQ_path={LQ_path}: {e}")
+
+        # Get GT_size (safe fallbacks)
+        GT_size = None
         if hasattr(self, 'dataset_opt') and isinstance(self.dataset_opt, dict):
             GT_size = self.dataset_opt.get('GT_size', None)
 
-        # 2) Then try to use self.phase with global opt if available
         if GT_size is None and hasattr(self, 'opt') and isinstance(self.opt, dict):
             phase = getattr(self, 'phase', None)
             if phase is None:
-                # Try to infer phase from dataset_opt if present
                 if hasattr(self, 'dataset_opt') and isinstance(self.dataset_opt, dict):
                     phase = self.dataset_opt.get('phase', 'train')
                 else:
                     phase = 'train'
             GT_size = self.opt.get('datasets', {}).get(phase, {}).get('GT_size', None)
 
-        # 3) Final fallback: check for top-level GT_size
         if GT_size is None and hasattr(self, 'opt') and isinstance(self.opt, dict):
             GT_size = self.opt.get('GT_size', None)
 
-        #---------------------------------------------------------------
         scale = int(self.opt.get('scale', 1))
 
+        # If user requested resizing, do it safely (convert to HWC for cv2)
         if GT_size is not None:
             try:
-                # Helper: convert CHW -> HWC only if needed (imread may give CHW)
-                def to_hwc(img):
-                    # imgs may be numpy arrays
-                    if isinstance(img, np.ndarray) and img.ndim == 3 and img.shape[0] in (1, 3):
-                        return np.transpose(img, (1, 2, 0))
-                    return img
+                # helper conversions
+                def chw_to_hwc(arr):
+                    if isinstance(arr, np.ndarray) and arr.ndim == 3:
+                        return np.transpose(arr, (1, 2, 0))
+                    return arr
 
-                def to_chw(img, was_chw):
-                    if was_chw and isinstance(img, np.ndarray) and img.ndim == 3:
-                        return np.transpose(img, (2, 0, 1))
-                    return img
+                def hwc_to_chw(arr):
+                    if isinstance(arr, np.ndarray) and arr.ndim == 3:
+                        return np.transpose(arr, (2, 0, 1))
+                    return arr
 
-                hr_was_chw = (isinstance(hr, np.ndarray) and hr.ndim == 3 and hr.shape[0] in (1, 3))
-                lr_was_chw = (isinstance(lr, np.ndarray) and lr.ndim == 3 and lr.shape[0] in (1, 3))
+                hr_hwc = chw_to_hwc(hr)
+                lr_hwc = chw_to_hwc(lr)
 
-                hr_hwc = to_hwc(hr)
-                lr_hwc = to_hwc(lr)
-
-                # cv2.resize expects size=(width, height)
+                # cv2.resize expects (width, height)
                 hr_hwc = cv2.resize(hr_hwc, (GT_size, GT_size), interpolation=cv2.INTER_CUBIC)
                 lq_size = max(1, GT_size // scale)
                 lr_hwc = cv2.resize(lr_hwc, (lq_size, lq_size), interpolation=cv2.INTER_AREA)
 
-                # convert back to original layout (CHW) if needed
-                hr = to_chw(hr_hwc, hr_was_chw)
-                lr = to_chw(lr_hwc, lr_was_chw)
-
-                lq_img, gt_img = lr, hr
+                # back to CHW
+                hr = hwc_to_chw(hr_hwc)
+                lr = hwc_to_chw(lr_hwc)
             except Exception as e2:
-                raise RuntimeError(f"[Dataset] Fatal: couldn't normalize sample sizes: {e2}")
+                # Provide full debug info in the raised error so you can identify the bad sample quickly
+                raise RuntimeError(f"[Dataset] Fatal: couldn't normalize sample sizes for index {index} (GT_path={GT_path}, LQ_path={LQ_path}). "
+                                   f"hr shape before/after: {getattr(self, 'last_hr_shape', None)} -> {getattr(hr, 'shape', None)}; "
+                                   f"lr shape: {getattr(lr, 'shape', None)}; underlying error: {e2}")
 
-        #---------------------------------------------------------------
-        scale = int(self.opt.get('scale', 1))
+        # ensure integer shapes and infer scale if needed
+        if self.scale is None:
+            # safe check to avoid zero-division or dimension errors
+            try:
+                self.scale = int(hr.shape[1] // lr.shape[1])
+            except Exception as e:
+                raise RuntimeError(f"[Dataset] Couldn't infer scale for index {index} (GT_path={GT_path}, LQ_path={LQ_path}): hr.shape={getattr(hr,'shape',None)}, lr.shape={getattr(lr,'shape',None)}; {e}")
 
-        if GT_size is not None:
-                try:
-                    gt = cv2.resize(gt, (GT_size, GT_size), interpolation=cv2.INTER_CUBIC)
-                    lq = cv2.resize(lq, (max(1, GT_size//scale), max(1, GT_size//scale)), interpolation=cv2.INTER_AREA)
-                    lq_img, gt_img = lq, gt
-                except Exception as e2:
-                    raise RuntimeError(f"[Dataset] Fatal: couldn't normalize sample sizes: {e2}")
-        if self.scale == None:
-            self.scale = hr.shape[1] // lr.shape[1]
-        
         assert hr.shape[1] == self.scale * lr.shape[1], ('non-fractional ratio or incorrect scale', lr.shape, hr.shape)
 
         if self.alignment is None:
@@ -251,7 +256,8 @@ class LQGTMulticlassDataset(data.Dataset):
             hr, lr = random_crop(hr, lr, self.crop_size, self.scale, self.use_crop, alignment=self.alignment)
 
         if self.center_crop_hr_size:
-            hr, lr = center_crop(hr, self.center_crop_hr_size, alignment=self.alignment), center_crop(lr, self.center_crop_hr_size//self.scale, alignment=self.alignment//self.scale)
+            hr = center_crop(hr, self.center_crop_hr_size, alignment=self.alignment)
+            lr = center_crop(lr, self.center_crop_hr_size // self.scale, alignment=self.alignment // self.scale)
 
         if self.use_flip:
             hr, lr = random_flip(hr, lr)
@@ -260,21 +266,19 @@ class LQGTMulticlassDataset(data.Dataset):
             hr, lr = random_rotation(hr, lr)
 
         if self.target_scale is not None and self.scale != self.target_scale:
-            # make size of lr is divible by recaling factor
-            # otherwise matlablike_resize gives non-multiple sizes
-            rescale = self.target_scale//self.scale
-            lr = lr[:, :(lr.shape[1]//rescale)*rescale, :(lr.shape[2]//rescale)*rescale]
-            hr = hr[:, :(hr.shape[1]//self.target_scale)*self.target_scale, :(hr.shape[2]//self.target_scale)*self.target_scale]
+            rescale = self.target_scale // self.scale
+            lr = lr[:, :(lr.shape[1] // rescale) * rescale, :(lr.shape[2] // rescale) * rescale]
+            hr = hr[:, :(hr.shape[1] // self.target_scale) * self.target_scale, :(hr.shape[2] // self.target_scale) * self.target_scale]
 
-            # use matlablike_resize for consitency
             lr = np.transpose(lr, [1, 2, 0])
-            lr = matlablike_resize.imresize(lr, 1/rescale)
+            lr = matlablike_resize.imresize(lr, 1 / rescale)
             lr = np.transpose(lr, [2, 0, 1])
 
             assert hr.shape[1] == self.target_scale * lr.shape[1], ('non-fractional ratio', lr.shape, hr.shape)
 
-        hr = hr / 255.0
-        lr = lr / 255.0
+        # scale to [0,1] and convert to torch
+        hr = hr.astype(np.float32) / 255.0
+        lr = lr.astype(np.float32) / 255.0
 
         hr = torch.Tensor(hr)
         lr = torch.Tensor(lr)
@@ -283,17 +287,17 @@ class LQGTMulticlassDataset(data.Dataset):
             y_label = self.y_labels[index]
 
             if self.normalize and y_label == 1:
-                hr = torch.clamp(((hr - self.mean_noisy_hr)/self.std_noisy_hr)*self.std_clean_hr + self.mean_clean_hr, 0, 1)
-                lr = torch.clamp(((lr - self.mean_noisy_lr)/self.std_noisy_lr)*self.std_clean_lr + self.mean_clean_lr, 0, 1)
+                hr = torch.clamp(((hr - self.mean_noisy_hr) / self.std_noisy_hr) * self.std_clean_hr + self.mean_clean_hr, 0, 1)
+                lr = torch.clamp(((lr - self.mean_noisy_lr) / self.std_noisy_lr) * self.std_clean_lr + self.mean_clean_lr, 0, 1)
 
-            return {'LQ': lr, 
-                    'GT': hr, 
+            return {'LQ': lr,
+                    'GT': hr,
                     'y_label': y_label,
-                    'LQ_path': LQ_path, 
-                    'GT_path': GT_path,
-                }
+                    'LQ_path': LQ_path,
+                    'GT_path': GT_path}
 
         return {'LQ': lr, 'GT': hr, 'LQ_path': LQ_path, 'GT_path': GT_path}
+
 
     def __len__(self):
         return len(self.paths_GT)
