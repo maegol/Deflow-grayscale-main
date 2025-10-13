@@ -246,5 +246,133 @@ def main():
     print("Done.")
 
 
+def normalize_sizes_to_max(target_dir: str, scales: list, out_ext: str = None, overwrite: bool = True, verbose: bool = True):
+    """
+    For each scale folder target_dir/<scale>x/, find the largest width and height among all images
+    and resize every image in that folder to (max_w, max_h). Saves in-place (overwrite=True) or
+    creates new filename with suffix '_norm' if overwrite=False.
+
+    - target_dir: parent folder containing <scale>x folders (e.g. /path/to/Final_dataset/Train)
+    - scales: list of integer scales, e.g. [1,4]
+    - out_ext: if set (like '.png'), save normalized files with that extension; otherwise preserve original.
+    - overwrite: if True, replace original files; if False, write new files with suffix '_norm' keeping originals.
+    - verbose: print progress messages
+    """
+    if not os.path.isdir(target_dir):
+        raise ValueError(f"Target directory does not exist: {target_dir}")
+
+    for scale in scales:
+        folder = os.path.join(target_dir, f'{scale}x')
+        if not os.path.isdir(folder):
+            if verbose:
+                print(f"[normalize] Skipping missing folder: {folder}")
+            continue
+
+        # Collect image file names
+        fns = sorted([fn for fn in os.listdir(folder) if is_image_file(fn)])
+        if len(fns) == 0:
+            if verbose:
+                print(f"[normalize] No images found in {folder}.")
+            continue
+
+        # Find maximum width & height
+        max_w = 0
+        max_h = 0
+        for fn in fns:
+            p = os.path.join(folder, fn)
+            try:
+                with Image.open(p) as im:
+                    w, h = im.size
+            except Exception as e:
+                if verbose:
+                    print(f"[normalize] Warning: can't open {p}: {e}. Skipping.")
+                continue
+            if w > max_w: max_w = w
+            if h > max_h: max_h = h
+
+        if max_w == 0 or max_h == 0:
+            if verbose:
+                print(f"[normalize] Could not determine max size for {folder}.")
+            continue
+
+        if verbose:
+            print(f"[normalize] {folder}: resizing all images to (W,H)=({max_w},{max_h})")
+
+        # Resize and save
+        for fn in fns:
+            p = os.path.join(folder, fn)
+            try:
+                with Image.open(p) as im:
+                    # Force single-channel grayscale 'L' mode
+                    im = im.convert('L')
+                    w, h = im.size
+                    if (w, h) != (max_w, max_h):
+                        # Choose resample: if upscaling (source smaller) use BICUBIC, if downscaling use LANCZOS
+                        if w < max_w or h < max_h:
+                            resamp = Image.BICUBIC
+                        else:
+                            resamp = Image.LANCZOS
+                        im_resized = im.resize((max_w, max_h), resample=resamp)
+                    else:
+                        im_resized = im
+
+                    # Build output path
+                    base, ext = os.path.splitext(fn)
+                    save_ext = out_ext if out_ext is not None else ext
+                    if not save_ext.startswith('.'):
+                        save_ext = '.' + save_ext
+
+                    if overwrite:
+                        save_path = os.path.join(folder, base + save_ext)
+                    else:
+                        save_path = os.path.join(folder, base + '_norm' + save_ext)
+
+                    # Save (PIL deduces format from extension)
+                    im_resized.save(save_path)
+                    if verbose:
+                        print(f"[normalize] Saved {save_path}")
+            except Exception as e:
+                if verbose:
+                    print(f"[normalize] Failed to process {p}: {e}")
+
+# ------------------ integrate with CLI ------------------
+# Update parse_args() definition above to include normalization flags.
+# If you already have parse_args(), edit it to add the following two arguments:
+#
+#    p.add_argument('--normalize', action='store_true',
+#                   help='After creating grayscale dataset, normalize image sizes (make same dims per scale using max size).')
+#    p.add_argument('--normalize_only', action='store_true',
+#                   help='Only run normalization on an existing target_dir (skip dataset creation).')
+#
+# If you prefer not to edit parse_args, you can call normalize_sizes_to_max(...) directly in a separate script.
+
+# Example of using the flags — replace or augment your existing main() end with:
+def _maybe_run_normalize(args):
+    if args.normalize_only:
+        print("[main] Running normalization only (no dataset creation).")
+        normalize_sizes_to_max(args.target_dir, args.scales, out_ext=args.out_ext, overwrite=True, verbose=True)
+        return True
+    if args.normalize:
+        print("[main] Running normalization after dataset creation.")
+        normalize_sizes_to_max(args.target_dir, args.scales, out_ext=args.out_ext, overwrite=True, verbose=True)
+    return False
+
+# If you added the normalize flags to parse_args(), then call _maybe_run_normalize(args)
+# inside main() at the appropriate places:
+#
+# - If args.normalize_only: call it immediately and exit.
+# - If args.normalize: call it after the image creation loop finishes.
+#
+# e.g. near the start of main() after args = parse_args():
+#    if args.normalize_only:
+#        _maybe_run_normalize(args)
+#        return
+#
+# and at the end of main(), before printing "Done.":
+#    if args.normalize:
+#        _maybe_run_normalize(args)
+#
+# -----------------------------------------------------------------------------------------
+
 if __name__ == '__main__':
     main()

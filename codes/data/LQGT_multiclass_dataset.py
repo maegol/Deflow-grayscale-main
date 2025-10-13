@@ -7,63 +7,6 @@ import matlablike_resize
 import os
 import cv2
 
-def _to_gray_if_needed(img):
-    """Return a 2D uint8 grayscale numpy array regardless of input format."""
-    if not isinstance(img, np.ndarray):
-        img = np.array(img)
-    # squeeze channel dim if single-channel stored as HxWx1
-    if img.ndim == 3 and img.shape[2] == 1:
-        img = img.squeeze(axis=2)
-    # if RGB/RGBA -> convert to gray using Rec.601
-    if img.ndim == 3 and img.shape[2] >= 3:
-        # OpenCV expects BGR; if loaded via cv2 it's BGR, if PIL->numpy it's RGB.
-        # We do a neutral conversion using channels as-is (assuming RGB order).
-        img = img[..., :3].astype(np.float32)
-        gray = 0.299 * img[..., 0] + 0.587 * img[..., 1] + 0.114 * img[..., 2]
-        gray = np.clip(gray, 0, 255).round().astype(np.uint8)
-        return gray
-    # if already 2D
-    if img.ndim == 2:
-        # ensure uint8
-        if img.dtype != np.uint8:
-            if np.issubdtype(img.dtype, np.floating):
-                maxv = float(np.nanmax(img)) if img.size else 0.0
-                if maxv <= 1.0 + 1e-8:
-                    img = (np.clip(img, 0.0, 1.0) * 255.0).round().astype(np.uint8)
-                else:
-                    img = np.clip(img, 0, 255).round().astype(np.uint8)
-            else:
-                img = np.clip(img, 0, 255).astype(np.uint8)
-        return img
-    raise ValueError(f"Unsupported image shape: {getattr(img, 'shape', None)}")
-def _enforce_fixed_sizes(lq_img, gt_img, GT_size, scale):
-    """
-    Ensure gt_img is (GT_size, GT_size) and lq_img is (GT_size//scale, GT_size//scale).
-    Both outputs are 2D uint8 grayscale numpy arrays.
-    """
-    # convert to grayscale arrays
-    gt = _to_gray_if_needed(gt_img)
-    lq = _to_gray_if_needed(lq_img)
-
-    desired_gt = int(GT_size)
-    desired_lq = max(1, int(GT_size) // int(scale))
-
-    # Resize GT if needed (use cubic for up/down)
-    if gt.shape[:2] != (desired_gt, desired_gt):
-        gt = cv2.resize(gt, (desired_gt, desired_gt), interpolation=cv2.INTER_CUBIC)
-
-    # Resize LQ if needed (use area for downsampling)
-    if lq.shape[:2] != (desired_lq, desired_lq):
-        # if lq is larger than desired, use INTER_AREA, else BICUBIC
-        if lq.shape[0] > desired_lq or lq.shape[1] > desired_lq:
-            interp = cv2.INTER_AREA
-        else:
-            interp = cv2.INTER_CUBIC
-        lq = cv2.resize(lq, (desired_lq, desired_lq), interpolation=interp)
-
-    return lq, gt
-
-
 def getEnv(name): import os; return True if name in os.environ.keys() else False
 
 class LQGTMulticlassDataset(data.Dataset):
@@ -131,35 +74,7 @@ class LQGTMulticlassDataset(data.Dataset):
             assert paths_GT, 'Error: GT path is empty.'
             assert paths_LQ, 'Error: LQ path is empty on the fly downsampling not yet supported.'
             # print(len(paths_GT), self.paths_GT[:10])
-             # --- after you have paths_LQ and paths_GT built ---
-
-            # If equal length, nothing to do
-            if len(paths_LQ) != len(paths_GT):
-                # Try to match by basename (filename without extension)
-                gt_by_name = {os.path.splitext(os.path.basename(p))[0]: p for p in paths_GT}
-                matched_LQ = []
-                matched_GT = []
-
-                for p in paths_LQ:
-                    name = os.path.splitext(os.path.basename(p))[0]
-                    if name in gt_by_name:
-                        matched_LQ.append(p)
-                        matched_GT.append(gt_by_name[name])
-
-                if len(matched_LQ) > 0:
-                 # Use matched pairs (preserves order of LQ list where match found)
-                    paths_LQ = matched_LQ
-                    paths_GT = matched_GT
-                    print(f"[Dataset] Matched {len(paths_LQ)} LQ-GT pairs by filename (basename).")
-                else:
-                    # Fallback: pair by truncation to the minimum length
-                    min_len = min(len(paths_LQ), len(paths_GT))
-                    paths_LQ = paths_LQ[:min_len]
-                    paths_GT = paths_GT[:min_len]
-                    print(f"[Dataset] No basename matches found. Truncated to min length = {min_len} pairs.")
-            else:
-            # lengths equal: proceed as before
-                pass
+            
             if paths_LQ and paths_GT:
                 assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
     
