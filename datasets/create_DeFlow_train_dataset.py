@@ -172,6 +172,8 @@ def parse_args():
                    help='If set, enforce GT size for 1x images; LQ sizes will be gt_size//scale (min 1)')
     p.add_argument('--out_ext', type=str, default=None,
                    help='Output extension/format (e.g. .png). If not set, preserve input filename extension.')
+    p.add_argument('--nomalize', type=str, default=None, help='Normalize output size')
+    p.add_argument('--normalize_only', type=str, default=None, help='Call Normalize function and exit')
     return p.parse_args()
 
 
@@ -182,7 +184,9 @@ def main():
     scales = args.scales
     gt_size = args.gt_size
     out_ext = args.out_ext
-
+    if args.normalize_only: 
+        _maybe_run_normalize(args); 
+        return
     # prepare output directories
     scale_dirs = []
     for scale in scales:
@@ -242,7 +246,9 @@ def main():
                 save_grayscale_pil(gray, out_path)
             except Exception as e:
                 tqdm.write(f"Failed to save {out_path}: {e}")
-
+    if args.normalize: 
+        _maybe_run_normalize(args)
+        
     print("Done.")
 
 
