@@ -254,11 +254,9 @@ def main():
                 model.feed_data(train_data)
 
                 #### update learning rate
-                model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
                 nll = None
-                
                 nll = model.optimize_parameters(current_step)
-
+                model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
                 if nll is None:
                     nll = 0
 
