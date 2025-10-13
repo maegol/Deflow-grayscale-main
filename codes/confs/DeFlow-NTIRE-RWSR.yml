@@ -16,7 +16,7 @@ datasets:
     dataroot_LQ: [../datasets/Final_dataset/TrainA/1x,
                   ../datasets/Final_dataset/TrainA/4x]
     quant: 32
-    n_workers: 4  # per GPU
+    n_workers: 0  # per GPU
     batch_size: 8
     GT_size: 160
     balanced: false
