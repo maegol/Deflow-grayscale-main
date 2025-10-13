@@ -170,6 +170,7 @@ class LQGTMulticlassDataset(data.Dataset):
         
         #GT_size = self.opt['datasets'][self.phase].get('GT_size', None)
         #---------------------------------------------------------------
+        #---------------------------------------------------------------
         # Safe retrieval of GT_size with multiple fallbacks
         GT_size = None
 
@@ -191,6 +192,42 @@ class LQGTMulticlassDataset(data.Dataset):
         # 3) Final fallback: check for top-level GT_size
         if GT_size is None and hasattr(self, 'opt') and isinstance(self.opt, dict):
             GT_size = self.opt.get('GT_size', None)
+
+        #---------------------------------------------------------------
+        scale = int(self.opt.get('scale', 1))
+
+        if GT_size is not None:
+            try:
+                # Helper: convert CHW -> HWC only if needed (imread may give CHW)
+                def to_hwc(img):
+                    # imgs may be numpy arrays
+                    if isinstance(img, np.ndarray) and img.ndim == 3 and img.shape[0] in (1, 3):
+                        return np.transpose(img, (1, 2, 0))
+                    return img
+
+                def to_chw(img, was_chw):
+                    if was_chw and isinstance(img, np.ndarray) and img.ndim == 3:
+                        return np.transpose(img, (2, 0, 1))
+                    return img
+
+                hr_was_chw = (isinstance(hr, np.ndarray) and hr.ndim == 3 and hr.shape[0] in (1, 3))
+                lr_was_chw = (isinstance(lr, np.ndarray) and lr.ndim == 3 and lr.shape[0] in (1, 3))
+
+                hr_hwc = to_hwc(hr)
+                lr_hwc = to_hwc(lr)
+
+                # cv2.resize expects size=(width, height)
+                hr_hwc = cv2.resize(hr_hwc, (GT_size, GT_size), interpolation=cv2.INTER_CUBIC)
+                lq_size = max(1, GT_size // scale)
+                lr_hwc = cv2.resize(lr_hwc, (lq_size, lq_size), interpolation=cv2.INTER_AREA)
+
+                # convert back to original layout (CHW) if needed
+                hr = to_chw(hr_hwc, hr_was_chw)
+                lr = to_chw(lr_hwc, lr_was_chw)
+
+                lq_img, gt_img = lr, hr
+            except Exception as e2:
+                raise RuntimeError(f"[Dataset] Fatal: couldn't normalize sample sizes: {e2}")
 
         #---------------------------------------------------------------
         scale = int(self.opt.get('scale', 1))
