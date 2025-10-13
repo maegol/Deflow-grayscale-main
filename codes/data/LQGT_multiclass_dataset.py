@@ -7,6 +7,7 @@ import matlablike_resize
 import os
 import cv2
 
+
 def getEnv(name): import os; return True if name in os.environ.keys() else False
 
 class LQGTMulticlassDataset(data.Dataset):
@@ -74,6 +75,13 @@ class LQGTMulticlassDataset(data.Dataset):
             assert paths_GT, 'Error: GT path is empty.'
             assert paths_LQ, 'Error: LQ path is empty on the fly downsampling not yet supported.'
             # print(len(paths_GT), self.paths_GT[:10])
+            if len(paths_LQ) != len(paths_GT):
+                min_len = min(len(paths_LQ), len(paths_GT))
+                # Truncate both lists to the minimum length
+                paths_LQ = paths_LQ[:min_len]
+                paths_GT = paths_GT[:min_len]
+               
+                print(f"[Dataset] Warning: mismatched dataset sizes. Truncated to {min_len} pairs (LQ:{len(paths_LQ)}, GT:{len(paths_GT)}).")
             
             if paths_LQ and paths_GT:
                 assert len(paths_LQ) == len(paths_GT), 'GT and LQ datasets have different number of images - LQ: {}, GT: {}'.format(len(paths_LQ), len(paths_GT))
