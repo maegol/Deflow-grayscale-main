@@ -21,6 +21,18 @@ from utils.util import get_resume_paths, opt_get
 import MeasureLib
 
 import psutil
+import faulthandler, traceback, signal, subprocess, sys
+faulthandler.enable()  # prints Python stack traces on segfaults
+# Register handler so you can send SIGUSR1 to dump tracebacks of all threads:
+faulthandler.register(signal.SIGUSR1, all_threads=True)
+
+# Helpful: print these on start to confirm environment
+print("PID:", os.getpid())
+print("CUDA available:", torch.cuda.is_available())
+try:
+    subprocess.call(['nvidia-smi'])
+except Exception:
+    pass
 
 
 def getEnv(name): import os; return True if name in os.environ.keys() else False
@@ -253,12 +265,60 @@ def main():
                 #### training
                 model.feed_data(train_data)
 
-                #### update learning rate
-                nll = None
-                nll = model.optimize_parameters(current_step)
-                model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
-                if nll is None:
-                    nll = 0
+                try:
+                 # run optimizer step (this is your existing call)
+                    nll = model.optimize_parameters(current_step)
+                except Exception as e:
+                    print("Exception during optimize_parameters at step", current_step, "epoch", epoch)
+                    traceback.print_exc()
+                    # print memory status
+                    try:
+                        import psutil
+                        p = psutil.Process(os.getpid())
+                        print("RSS (GB):", p.memory_info().rss / 2**30)
+                    except Exception:
+                        pass
+                    try:
+                        subprocess.call(['nvidia-smi'])
+                    except Exception:
+                        pass
+                    raise
+
+                # force sync so CUDA errors surface here
+                if torch.cuda.is_available():
+                    try:
+                        torch.cuda.synchronize()
+                    except Exception as e:
+                        print("CUDA sync error after optimize at step", current_step)
+                        traceback.print_exc()
+                        subprocess.call(['nvidia-smi'])
+                        raise
+
+                # detect NaNs/Infs in gradients (inspect model nets if they exist)
+                try:
+                    for attr in dir(model):
+                        if attr.startswith('net'):
+                            net = getattr(model, attr)
+                            if hasattr(net, 'named_parameters'):
+                                for n, p in net.named_parameters():
+                                    if p.grad is not None:
+                                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                                            print("Bad grad in", attr, n, "shape", p.grad.shape)
+                                            raise RuntimeError("NaN/Inf found in gradients")
+                except Exception as e:
+                    print("Gradient check failed at step", current_step)
+                    traceback.print_exc()
+                    subprocess.call(['nvidia-smi'])
+                    raise
+
+                    # now update scheduler (after optimizer step)
+                try:
+                    model.update_learning_rate(current_step, warmup_iter=opt['train']['warmup_iter'])
+                except Exception as e:
+                    print("Scheduler update error at step", current_step)
+                    traceback.print_exc()
+                    raise
+
 
                 #### log
                 def eta(t_iter):
