@@ -172,8 +172,8 @@ def parse_args():
                    help='If set, enforce GT size for 1x images; LQ sizes will be gt_size//scale (min 1)')
     p.add_argument('--out_ext', type=str, default=None,
                    help='Output extension/format (e.g. .png). If not set, preserve input filename extension.')
-    p.add_argument('--nomalize', type=str, default=None, help='Normalize output size')
-    p.add_argument('--normalize_only', type=str, default=None, help='Call Normalize function and exit')
+    p.add_argument('--nomalize', type=bool, default= True, help='Normalize output size')
+    p.add_argument('--normalize_only', type=bool, default= False, help='Call Normalize function and exit')
     return p.parse_args()
 
 
@@ -248,7 +248,7 @@ def main():
                 tqdm.write(f"Failed to save {out_path}: {e}")
     if args.normalize: 
         _maybe_run_normalize(args)
-        
+
     print("Done.")
 
 
