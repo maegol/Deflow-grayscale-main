@@ -243,10 +243,16 @@ def main():
     logger.info('Start training from epoch: {:d}, iter: {:d}'.format(start_epoch, current_step))
     timerData = TickTock()
 
-    process = psutil.Process(os.getpid())
-
-    ram = process.memory_info().rss / (2 ** 30)
-    print('RAM usage:', ram)
+    # Use a local import to avoid accidental name-shadowing issues and handle missing psutil
+    try:
+        import psutil 
+        process = psutil.Process(os.getpid())
+        ram = process.memory_info().rss / (2 ** 30)
+        print('RAM usage:', ram)
+    except Exception as _e:
+        process = None
+        print("Warning: psutil not available or failed to create Process():", _e)
+        print("Skipping RAM usage print.")
 
 
     for epoch in range(start_epoch, total_epochs + 1):
