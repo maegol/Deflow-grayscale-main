@@ -225,6 +225,85 @@ def main():
     #### create model
     current_step = 0 if resume_state is None else resume_state['iter']
     model = create_model(opt, current_step)
+    # ---------- DIAGNOSTIC: print conv weight vs runtime input channels ----------
+    import torch, sys, traceback
+
+    def find_conv_mismatches(model, sample_shape=(1,1,80,80)):
+        # pick the generator submodule if present
+        net = None
+        if hasattr(model, 'get_model'):
+            net = model.get_model()
+        elif hasattr(model, 'netG'):
+            net = model.netG
+        else:
+            net = model
+
+        device = next(net.parameters()).device
+        # store observed input shapes per conv module
+        observed = {}
+
+        hooks = []
+        def make_hook(name):
+            def hook(module, inputs, output):
+                try:
+                    inp = inputs[0]
+                    observed[name] = tuple(inp.size())
+                except Exception:
+                    observed[name] = None
+            return hook
+
+    # register hooks on every Conv2d
+        for name, module in net.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                hooks.append(module.register_forward_hook(make_hook(name)))
+
+        # run one forward with a dummy grayscale tensor; wrap in try because forward may fail
+        dummy = torch.randn(sample_shape).to(device)
+        try:
+            with torch.no_grad():
+                net(dummy)
+        except Exception as e:
+            print("[diagnostic] Forward raised (this can happen). Hooks still collected info up to failure.")
+            # print brief traceback
+            traceback.print_exc(limit=1)
+
+        # remove hooks
+        for h in hooks:
+            h.remove()
+
+        # compare recorded input channels with conv weight in_channels
+        mismatches = []
+        for name, module in net.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                w = module.weight
+                w_shape = tuple(w.shape)  # (out_c, in_c, kh, kw)
+                obs = observed.get(name, None)
+                if obs is None:
+                # no observation for that module (forward didn't reach it)
+                    continue
+                # obs is a tuple like (B,C,H,W)
+                obs_in_ch = obs[1] if len(obs) > 1 else None
+                if obs_in_ch is None:
+                    continue
+                if w_shape[1] != obs_in_ch:
+                    mismatches.append({
+                        'module_name': name,
+                        'module_type': type(module).__name__,
+                        'weight_shape': w_shape,
+                        'observed_input_shape': obs,
+                        'device': str(w.device),
+                })
+        return mismatches
+
+    mismatches = find_conv_mismatches(model)
+    print("=== CONV MISMATCHES (weight_in != observed_input_ch) ===")
+    if not mismatches:
+        print("No mismatches found (all conv weights match observed input channels).")
+    else:
+        for m in mismatches:
+            print(m)
+    print("=== END DIAGNOSTIC ===")
+    # -------------------------------------------------------------------------
 
     #### resume training
     if resume_state:
