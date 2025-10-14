@@ -39,25 +39,25 @@ class LQGTMulticlassDataset(data.Dataset):
             self.std_noisy_lr = torch.tensor(opt['normalize']['std_noisy_lr']).reshape(3,1,1)/255
 
                     # If dataset images are grayscale, reduce mean/std that were provided for 3 channels -> 1 channel
-        if self.normalize:
-            def _to_1ch(t):
-                # input: torch tensor shaped (3,1,1) or (1,1,1)
-                try:
-                    if t.shape[0] == 3:
-                        # average the 3 channel scalars into one (keeps consistent brightness)
-                        m = t.mean().reshape(1,1,1)
-                        return m
-                except Exception:
-                    pass
-                return t
-            self.mean_clean_hr = _to_1ch(self.mean_clean_hr)
-            self.mean_noisy_hr = _to_1ch(self.mean_noisy_hr)
-            self.std_clean_hr = _to_1ch(self.std_clean_hr)
-            self.std_noisy_hr = _to_1ch(self.std_noisy_hr)
-            self.mean_clean_lr = _to_1ch(self.mean_clean_lr)
-            self.mean_noisy_lr = _to_1ch(self.mean_noisy_lr)
-            self.std_clean_lr = _to_1ch(self.std_clean_lr)
-            self.std_noisy_lr = _to_1ch(self.std_noisy_lr)
+            if self.normalize:
+                def _to_1ch(t):
+                    # input: torch tensor shaped (3,1,1) or (1,1,1)
+                    try:
+                        if t.shape[0] == 3:
+                            # average the 3 channel scalars into one (keeps consistent brightness)
+                            m = t.mean().reshape(1,1,1)
+                            return m
+                    except Exception:
+                        pass
+                    return t
+                self.mean_clean_hr = _to_1ch(self.mean_clean_hr)
+                self.mean_noisy_hr = _to_1ch(self.mean_noisy_hr)
+                self.std_clean_hr = _to_1ch(self.std_clean_hr)
+                self.std_noisy_hr = _to_1ch(self.std_noisy_hr)
+                self.mean_clean_lr = _to_1ch(self.mean_clean_lr)
+                self.mean_noisy_lr = _to_1ch(self.mean_noisy_lr)
+                self.std_clean_lr = _to_1ch(self.std_clean_lr)
+                self.std_noisy_lr = _to_1ch(self.std_noisy_lr)
 
         else:
             self.normalize = False
