@@ -131,7 +131,7 @@ class FlowUpsamplerNet(nn.Module):
 
     def arch_level_conditional(self, H, W, opt, opt_get):
         levelConditionalOpt = opt_get(opt, ['network_G', 'flow', 'levelConditional'])
-        if levelConditionalOpt is not None and levelConditionalOpt['type'] == 'rgb':
+        if levelConditionalOpt is not None and levelConditionalOpt['type'] == 'GRAY':
             self.layers.append(BypassSplit(n_split=1))
             self.C = self.C + 1
             self.output_shapes.append([-1, self.C, H, W])
