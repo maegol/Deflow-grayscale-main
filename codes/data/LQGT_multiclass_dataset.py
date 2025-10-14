@@ -37,6 +37,28 @@ class LQGTMulticlassDataset(data.Dataset):
             self.mean_noisy_lr = torch.tensor(opt['normalize']['mean_noisy_lr']).reshape(3,1,1)/255
             self.std_clean_lr = torch.tensor(opt['normalize']['std_clean_lr']).reshape(3,1,1)/255
             self.std_noisy_lr = torch.tensor(opt['normalize']['std_noisy_lr']).reshape(3,1,1)/255
+
+                    # If dataset images are grayscale, reduce mean/std that were provided for 3 channels -> 1 channel
+        if self.normalize:
+            def _to_1ch(t):
+                # input: torch tensor shaped (3,1,1) or (1,1,1)
+                try:
+                    if t.shape[0] == 3:
+                        # average the 3 channel scalars into one (keeps consistent brightness)
+                        m = t.mean().reshape(1,1,1)
+                        return m
+                except Exception:
+                    pass
+                return t
+            self.mean_clean_hr = _to_1ch(self.mean_clean_hr)
+            self.mean_noisy_hr = _to_1ch(self.mean_noisy_hr)
+            self.std_clean_hr = _to_1ch(self.std_clean_hr)
+            self.std_noisy_hr = _to_1ch(self.std_noisy_hr)
+            self.mean_clean_lr = _to_1ch(self.mean_clean_lr)
+            self.mean_noisy_lr = _to_1ch(self.mean_noisy_lr)
+            self.std_clean_lr = _to_1ch(self.std_clean_lr)
+            self.std_noisy_lr = _to_1ch(self.std_noisy_lr)
+
         else:
             self.normalize = False
 
@@ -188,6 +210,41 @@ class LQGTMulticlassDataset(data.Dataset):
             lr = ensure_chw(lr)
         except Exception as e:
             raise RuntimeError(f"[Dataset] Failed to standardize image layout for index {index}, GT_path={GT_path}, LQ_path={LQ_path}: {e}")
+
+        # --- ENSURE single-channel (grayscale) in CHW layout --------------------------------
+        # Convert any 3-channel images to 1-channel using luminance, keeping dtype.
+        def _to_grayscale_chw(arr):
+            """
+            Input: numpy array in CHW or HWC or HxW forms (but here we pass CHW).
+            Return: CHW numpy array with 1 channel (shape (1,H,W)).
+            """
+            # assume arr is CHW already (as ensure_chw returned)
+            if not isinstance(arr, np.ndarray):
+                return arr
+            if arr.ndim == 2:
+                # H x W -> 1 x H x W
+                return arr[np.newaxis, ...]
+            if arr.ndim == 3:
+                # if arr is CHW and first dim is channels
+                C = arr.shape[0]
+                if C == 1:
+                    return arr
+                if C == 3:
+                    # arr is CHW with 3 channels -> convert to luminance
+                    r = arr[0].astype(np.float32)
+                    g = arr[1].astype(np.float32)
+                    b = arr[2].astype(np.float32)
+                    gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
+                    return gray[np.newaxis, ...]
+            # fallback: return as is
+            return arr
+
+        try:
+            hr = _to_grayscale_chw(hr)
+            lr = _to_grayscale_chw(lr)
+        except Exception as e:
+            raise RuntimeError(f"[Dataset] Failed to convert to grayscale for index {index}, GT_path={GT_path}, LQ_path={LQ_path}: {e}")
+        # -----------------------------------------------------------------------------------
 
         # Get GT_size (safe fallbacks)
         GT_size = None
