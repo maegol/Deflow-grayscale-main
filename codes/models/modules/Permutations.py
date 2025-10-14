@@ -103,24 +103,55 @@ class InvertibleConv1x1(nn.Module):
     def forward(self, input, logdet=None, reverse=False):
         """
         log-det = log|abs(|W|)| * pixels
-        """
 
+        Compatibility: if the stored 1x1 weight was created for RGB-triplet channels
+        (out_c == in_c == base*3) but runtime input is grayscale (in_channels == base),
+        collapse the 3x3 RGB blocks by averaging to produce a base x base 1x1 weight copy.
+        """
         if self.min_singular is not None:
             # clip singular values
             with torch.no_grad():
                 self.weight.copy_(clip_singular_values(self.weight.double(), min=self.min_singular).float())
 
+        # get the original weight and dlogdet
         weight, dlogdet = self.get_weight(input, reverse)
+
+        # Prepare a weight to use for convolution; by default it's the original weight.
+        weight_to_use = weight
+
+        # Try to adapt RGB-trained 1x1 conv weights for grayscale input
+        try:
+            out_c, in_c, kh, kw = weight.shape
+            in_channels = input.size(1)
+
+            # Only attempt the collapse for 1x1 kernels where weight was built for RGB triplets
+            if kh == 1 and kw == 1 and out_c == in_channels * 3 and in_c == in_channels * 3:
+                base = in_channels  # target base channels
+                # reshape from (out_c, in_c, 1, 1) -> (base,3, base,3,1,1) then average RGB dims 1 and 3
+                # ensure safe device/dtype handling
+                w = weight.view(base, 3, base, 3, 1, 1)
+                w_collapsed = w.mean(dim=(1, 3))  # shape (base, base, 1, 1)
+                weight_to_use = w_collapsed.contiguous().to(device=weight.device, dtype=weight.dtype)
+                try:
+                    print(f"[Permutations] Collapsed 1x1 conv weight {out_c}x{in_c} -> {base}x{base} for grayscale input.")
+                except Exception:
+                    pass
+        except Exception:
+            # If anything goes wrong during attempted adaptation, fall back to original weight.
+            weight_to_use = weight
+
+        # perform convolution (same for forward and reverse branches)
         if not reverse:
-            z = F.conv2d(input, weight)
+            z = F.conv2d(input, weight_to_use)
             if logdet is not None:
                 logdet = logdet + dlogdet
             return z, logdet
         else:
-            z = F.conv2d(input, weight)
+            z = F.conv2d(input, weight_to_use)
             if logdet is not None:
                 logdet = logdet - dlogdet
             return z, logdet
+
 
 
 class InvertibleConv1x1Resqueeze(nn.Module):
