@@ -7,7 +7,7 @@ import logging
 import cv2
 import numpy as np
 
-import torch
+import torch, sys, traceback
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
@@ -226,7 +226,7 @@ def main():
     current_step = 0 if resume_state is None else resume_state['iter']
     model = create_model(opt, current_step)
     # ---------- DIAGNOSTIC: print conv weight vs runtime input channels ----------
-    import torch, sys, traceback
+  
 
     def find_conv_mismatches(model, sample_shape=(1,1,80,80)):
         # pick the generator submodule if present
