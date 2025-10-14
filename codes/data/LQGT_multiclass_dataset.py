@@ -309,6 +309,48 @@ class LQGTMulticlassDataset(data.Dataset):
         if self.alignment is None:
             self.alignment = self.target_scale if self.target_scale else self.scale
 
+        # -------------------- ENSURE CHW numpy arrays before spatial ops --------------------
+        def _ensure_chw_array(x):
+            """Return numpy array with shape (C, H, W). Accepts torch.Tensor, HxW, HxWxC, CxHxW."""
+            # convert torch -> numpy
+            if isinstance(x, torch.Tensor):
+                x = x.detach().cpu().numpy()
+            if not isinstance(x, np.ndarray):
+                raise RuntimeError(f"Unsupported image type: {type(x)}")
+
+            # H x W -> 1 x H x W
+            if x.ndim == 2:
+                return x[np.newaxis, ...]
+            # H x W x C -> C x H x W when last dim is channels
+            if x.ndim == 3:
+                # if the first dim looks like channels (1 or 3), assume CHW already
+                if x.shape[0] in (1, 3):
+                    return x
+                # otherwise if last dim is 1 or 3, assume HWC -> transpose
+                if x.shape[2] in (1, 3):
+                    return np.transpose(x, (2, 0, 1))
+                # otherwise, try to guess: if middle dim very small, it might be CHW transposed
+                # fallback: treat as CHW if plausible
+                if x.shape[0] not in (1, 3) and x.shape[2] not in (1, 3):
+                    # prefer keeping as-is and let next checks fail clearly
+                    return x
+            raise RuntimeError(f"Image has unsupported shape: {x.shape}")
+
+        # enforce shapes and provide debug info if wrong
+        try:
+            hr = _ensure_chw_array(hr)
+            lr = _ensure_chw_array(lr)
+        except Exception as e:
+            # helpful debug print and re-raise so you can find the problematic sample
+            print(f"[Dataset][ERROR] index={index} GT_path={GT_path} LQ_path={LQ_path} -- shape/type problem: hr_type={type(hr)}, hr_shape={getattr(hr,'shape',None)}; lr_type={type(lr)}, lr_shape={getattr(lr,'shape',None)}; error={e}")
+            raise
+
+        # Now shapes are (C,H,W). Verify dims are present for random_crop
+        if hr.ndim != 3 or lr.ndim != 3:
+            print(f"[Dataset][ERROR] index={index} GT_path={GT_path} LQ_path={LQ_path} -- unexpected dims after ensure: hr.ndim={getattr(hr,'ndim',None)}, lr.ndim={getattr(lr,'ndim',None)}")
+            raise RuntimeError(f"[Dataset] Unexpected image dims (need CHW): hr.ndim={getattr(hr,'ndim',None)}, lr.ndim={getattr(lr,'ndim',None)}")
+
+        # Proceed with crops / flips / rotations (same API as before)
         if self.use_crop:
             hr, lr = random_crop(hr, lr, self.crop_size, self.scale, self.use_crop, alignment=self.alignment)
 
@@ -321,6 +363,8 @@ class LQGTMulticlassDataset(data.Dataset):
 
         if self.use_rot:
             hr, lr = random_rotation(hr, lr)
+        # -------------------------------------------------------------------------------
+
 
         if self.target_scale is not None and self.scale != self.target_scale:
             rescale = self.target_scale // self.scale
