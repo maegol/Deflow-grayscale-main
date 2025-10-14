@@ -27,20 +27,99 @@ class _ActNorm(nn.Module):
         return NotImplemented
 
     def initialize_parameters(self, input):
+        # Attempt to adapt stored params if model was built for RGB but input is grayscale.
+        input_channels = input.size(1)
+
+        # If shapes differ, try adaptation before asserting in _check_input_dim
+        if hasattr(self, 'num_features') and self.num_features != input_channels:
+            # Case: weights were created for RGB triplets (num_features = 3 * base),
+            # but runtime input is grayscale (base). Collapse triplets -> single channel by averaging.
+            if self.num_features == input_channels * 3:
+                try:
+                    with torch.no_grad():
+                        dev = None
+                        dtype = None
+                        if hasattr(self, 'bias') and self.bias is not None:
+                            try:
+                                dev = self.bias.device
+                                dtype = self.bias.dtype
+                            except Exception:
+                                dev = input.device
+                                dtype = input.dtype
+                        else:
+                            dev = input.device
+                            dtype = input.dtype
+
+                        def _collapse_param(p):
+                            """Collapse a per-channel parameter (1 x N x 1 x 1 or N) into (1 x base x 1 x 1)."""
+                            if p is None:
+                                return None
+                            arr = p.data
+                            # flatten to 1D
+                            arr_flat = arr.view(-1).to(device=dev, dtype=dtype)
+                            # reshape to (base, 3) and average
+                            base = input_channels
+                            try:
+                                collapsed = arr_flat.view(base, 3).mean(dim=1)  # shape (base,)
+                            except Exception:
+                                # attempt alternative reshape if arr had extra dims
+                                collapsed = arr_flat.contiguous().view(base, 3).mean(dim=1)
+                            # return shaped as (1, base, 1, 1)
+                            return collapsed.view(1, base, 1, 1).to(device=dev, dtype=dtype)
+
+                        # Collapse common per-channel parameters if present
+                        if hasattr(self, 'bias') and self.bias is not None:
+                            self.bias = torch.nn.Parameter(_collapse_param(self.bias))
+                        if hasattr(self, 'logs') and self.logs is not None:
+                            self.logs = torch.nn.Parameter(_collapse_param(self.logs))
+                        # If running_mean / running_var exist as buffers, collapse them too
+                        if hasattr(self, 'running_mean') and getattr(self, 'running_mean') is not None:
+                            try:
+                                self.running_mean = _collapse_param(self.running_mean)
+                            except Exception:
+                                self.running_mean = self.running_mean  # leave as-is if we can't adapt
+                        if hasattr(self, 'running_var') and getattr(self, 'running_var') is not None:
+                            try:
+                                self.running_var = _collapse_param(self.running_var)
+                            except Exception:
+                                self.running_var = self.running_var
+
+                        old_nf = self.num_features
+                        self.num_features = input_channels
+                        try:
+                            print(f"[ActNorm] Adapted parameters from {old_nf} -> {self.num_features} channels (RGB->grayscale collapse).")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    raise AssertionError(f"[ActNorm] Parameter adaptation failed: {e}")
+        # else: not an RBC->grayscale case; keep original behavior and let _check_input_dim assert
+
+        # Now call the original dimension check (will assert if still mismatched)
         self._check_input_dim(input)
+
+        # Original initialization logic follows
         if not self.training:
             return
-        if (self.bias != 0).any():
-            self.inited = True
-            return
+        # If bias already non-zero, assume inited
+        try:
+        # works when bias shape is (1,C,1,1)
+            if (self.bias != 0).any():
+                self.inited = True
+                return
+        except Exception:
+        # conservative fallback: if any issue checking bias, proceed with init
+         pass
+
         assert input.device == self.bias.device, (input.device, self.bias.device)
         with torch.no_grad():
             bias = thops.mean(input.clone(), dim=[0, 2, 3], keepdim=True) * -1.0
             vars = thops.mean((input.clone() + bias) ** 2, dim=[0, 2, 3], keepdim=True)
             logs = torch.log(self.scale / (torch.sqrt(vars) + 1e-6))
+            # copy into parameters (shapes should match now)
             self.bias.data.copy_(bias.data)
             self.logs.data.copy_(logs.data)
             self.inited = True
+
 
     def _center(self, input, reverse=False, offset=None):
         bias = self.bias
