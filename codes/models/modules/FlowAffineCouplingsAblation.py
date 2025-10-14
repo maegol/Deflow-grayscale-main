@@ -23,7 +23,7 @@ class CondAffineCatAblation(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
@@ -108,7 +108,7 @@ class CondAffineSeparated(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
@@ -211,7 +211,7 @@ class CondAffineCatSymmetric(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
@@ -318,7 +318,7 @@ class CondAffineCatSymmetricBaseline(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
@@ -425,7 +425,7 @@ class CondAffineCondZTrCmid18Ablation(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.channels_middle = 18
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
@@ -518,7 +518,7 @@ class CondAffineCondFtAblation(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.channels_middle = 18
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
@@ -606,7 +606,7 @@ class CondAffineCatSymmetricAndSep(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
@@ -736,7 +736,7 @@ class CondAffineSeparatedAndCond(nn.Module):
         super().__init__()
         self.need_features = True
         self.in_channels = in_channels
-        self.in_channels_rrdb = 320
+        self.in_channels_rrdb = 318
         self.kernel_hidden = 1
         self.affine_eps = 0.0001
         self.n_hidden_layers = 1
