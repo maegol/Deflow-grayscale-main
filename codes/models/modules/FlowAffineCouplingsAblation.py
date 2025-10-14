@@ -819,10 +819,26 @@ class CondAffineSeparatedAndCond(nn.Module):
         return output, logdet
 
     def asserts(self, scale, shift, z1, z2):
-        assert z1.shape[1] == self.channels_for_nn, (z1.shape[1], self.channels_for_nn)
-        assert z2.shape[1] == self.channels_for_co, (z2.shape[1], self.channels_for_co)
-        assert scale.shape[1] == shift.shape[1], (scale.shape[1], shift.shape[1])
-        assert scale.shape[1] == z2.shape[1], (scale.shape[1], z1.shape[1], z2.shape[1])
+        expected_nn = self.channels_for_nn
+        expected_co = self.channels_for_co
+
+        if z1.shape[1] != expected_nn or z2.shape[1] != expected_co:
+            # Mensaje informativo para debug — quita/transforma en logging en producción
+            msg = (
+            "Channel mismatch in CondAffineSeparatedAndCond asserts:\n"
+            f"  z.shape = {z1.shape[0]},{z1.shape[1]},{z1.shape[2]},{z1.shape[3]}\n"
+            f"  z1.shape[1] = {z1.shape[1]} (expected {expected_nn})\n"
+            f"  z2.shape[1] = {z2.shape[1]} (expected {expected_co})\n"
+            f"  in_channels = {self.in_channels}\n"
+            f"  channels_for_nn = {self.channels_for_nn}\n"
+            f"  channels_for_co = {self.channels_for_co}\n"
+            f"  in_channels_rrdb = {self.in_channels_rrdb}\n"
+            )
+            raise AssertionError(msg)
+
+        if scale.shape[1] != shift.shape[1] or scale.shape[1] != z2.shape[1]:
+            raise AssertionError((scale.shape[1], shift.shape[1], z2.shape[1]))
+
 
     def get_logdet(self, scale):
         return thops.sum(torch.log(scale), dim=[1, 2, 3])

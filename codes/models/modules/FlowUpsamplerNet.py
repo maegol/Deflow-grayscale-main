@@ -131,10 +131,33 @@ class FlowUpsamplerNet(nn.Module):
 
     def arch_level_conditional(self, H, W, opt, opt_get):
         levelConditionalOpt = opt_get(opt, ['network_G', 'flow', 'levelConditional'])
-        if levelConditionalOpt is not None and levelConditionalOpt['type'] == 'GRAY':
+        if levelConditionalOpt is None:
+            return
+
+        # Normalizamos el valor a minúsculas para evitar problemas de mayúsculas
+        cond_type = str(levelConditionalOpt.get('type', '')).lower()
+
+        # SOLO aplicar bypass/incremento de canales para la variante RGB
+        if cond_type == 'rgb':
             self.layers.append(BypassSplit(n_split=1))
-            self.C = self.C + 1
-            self.output_shapes.append([-1, self.C, H, W])
+            # Sólo incrementar C si realmente partimos de 3 canales (RGB)
+            # (evita que se altere la cuenta para single-channel)
+            if self.C == 3:
+                self.C = self.C + 1
+                self.output_shapes.append([-1, self.C, H, W])
+            else:
+                # Si por alguna razón self.C no es 3, añadimos el layer pero NO cambiamos self.C
+                self.layers.pop()  # revertir añadir si no corresponde
+                # alternativamente, podrías querer añadir y ajustar lógicamente,
+                # pero evitar la alteración silenciosa evita desajustes.
+        elif cond_type in ('GRAY', 'grey', 'g', ''):
+            # Para grayscale no añadimos bypass ni incrementamos canales.
+            # Mantener comportamiento explícito (no-op).
+            return
+        else:
+            # Si hay otros tipos definidos, tratar como no-op por seguridad.
+            return
+
 
     def arch_FlowStep(self, H, K, LU_decomposed, W, actnorm_scale, affineInCh, flow_coupling, flow_permutation,
                       hidden_channels, normOpt, opt, opt_get, n_conditinal_channels=None):
