@@ -226,10 +226,14 @@ def main():
     current_step = 0 if resume_state is None else resume_state['iter']
     model = create_model(opt, current_step)
     # ---------- DIAGNOSTIC: print conv weight vs runtime input channels ----------
-  
+  # Place this right after: model = create_model(opt, current_step)
+# It inspects conv layers by running one dummy forward, lists mismatches,
+# and then tries to *adapt* weights where it's safe (RGB-triplet collapse).
+# Save a backup before running; this mutates model params in-memory.
 
-    def find_conv_mismatches(model, sample_shape=(1,1,80,80)):
-        # pick the generator submodule if present
+
+    def inspect_and_adapt_model_for_grayscale(model, sample_shape=(1,1,80,80)):
+        # find the real network (heuristics)
         net = None
         if hasattr(model, 'get_model'):
             net = model.get_model()
@@ -239,70 +243,129 @@ def main():
             net = model
 
         device = next(net.parameters()).device
-        # store observed input shapes per conv module
+        hooks = []
         observed = {}
 
-        hooks = []
         def make_hook(name):
-            def hook(module, inputs, output):
+            def hook(module, inputs, outputs):
                 try:
-                    inp = inputs[0]
-                    observed[name] = tuple(inp.size())
+                    observed[name] = tuple(inputs[0].size())
                 except Exception:
                     observed[name] = None
             return hook
 
-    # register hooks on every Conv2d
-        for name, module in net.named_modules():
-            if isinstance(module, torch.nn.Conv2d):
-                hooks.append(module.register_forward_hook(make_hook(name)))
+        # register hooks on conv modules
+        for name, m in net.named_modules():
+            if isinstance(m, torch.nn.Conv2d):
+                hooks.append((name, m, m.register_forward_hook(make_hook(name))))
 
-        # run one forward with a dummy grayscale tensor; wrap in try because forward may fail
+        # run a forward with dummy grayscale image to collect observed input shapes
         dummy = torch.randn(sample_shape).to(device)
         try:
             with torch.no_grad():
                 net(dummy)
-        except Exception as e:
-            print("[diagnostic] Forward raised (this can happen). Hooks still collected info up to failure.")
-            # print brief traceback
+        except Exception:
+            # forward may fail midway — hooks still recorded inputs up to failure
+            print("[diag] forward raised (expected if model shape mismatches). Continuing to collect hook info.")
             traceback.print_exc(limit=1)
 
         # remove hooks
-        for h in hooks:
-            h.remove()
+        for _,m,h in hooks:
+            try:
+                h.remove()
+            except Exception:
+                pass
 
-        # compare recorded input channels with conv weight in_channels
         mismatches = []
         for name, module in net.named_modules():
             if isinstance(module, torch.nn.Conv2d):
                 w = module.weight
-                w_shape = tuple(w.shape)  # (out_c, in_c, kh, kw)
+                wshape = tuple(w.shape)  # (out_c, in_c, kh, kw)
                 obs = observed.get(name, None)
                 if obs is None:
-                # no observation for that module (forward didn't reach it)
                     continue
-                # obs is a tuple like (B,C,H,W)
-                obs_in_ch = obs[1] if len(obs) > 1 else None
-                if obs_in_ch is None:
+                obs_in = obs[1] if len(obs) > 1 else None
+                if obs_in is None:
                     continue
-                if w_shape[1] != obs_in_ch:
-                    mismatches.append({
-                        'module_name': name,
-                        'module_type': type(module).__name__,
-                        'weight_shape': w_shape,
-                        'observed_input_shape': obs,
-                        'device': str(w.device),
-                })
+                if wshape[1] != obs_in:
+                    mismatches.append((name, module, wshape, obs))
+        # Print mismatches
+        if not mismatches:
+            print("[diag] No conv weight vs observed-input mismatches.")
+            return mismatches
+
+        print("[diag] Found conv mismatches:")
+        for name, module, wshape, obs in mismatches:
+            print(" -", name, "weight:", wshape, "observed_input:", obs)
+
+        # Try automatic safe adaptations
+        adapted = []
+        for name, module, wshape, obs in mismatches:
+            out_c, in_c, kh, kw = wshape
+            obs_in = obs[1]
+            try:
+                # Case A: weight.in_c == obs_in * 3  -> collapse input triplets by averaging
+                if in_c == obs_in * 3:
+                    with torch.no_grad():
+                        w = module.weight.data  # shape (out_c, in_c, kh, kw)
+                        # reshape input channel axis into (obs_in,3)
+                        new_w = w.view(out_c, obs_in, 3, kh, kw).mean(dim=2)  # (out_c, obs_in, kh, kw)
+                        module.weight.data = new_w.contiguous().to(device=w.device, dtype=w.dtype)
+                        print(f"[diag] Collapsed input channels of conv '{name}': in {in_c} -> {obs_in}")
+                        adapted.append(name)
+                        # If bias exists and has matching shape of out_c, keep it as-is.
+                    continue
+                # Case B: weight.out_c == obs_in * 3 and in_c == obs_in -> collapse output triplets
+                if out_c == obs_in * 3 and in_c == obs_in:
+                    with torch.no_grad():
+                        w = module.weight.data  # (out_c, in_c, kh, kw)
+                        new_w = w.view(obs_in, 3, in_c, kh, kw).mean(dim=1)  # (obs_in, in_c, kh, kw)
+                        module.weight.data = new_w.contiguous().to(device=w.device, dtype=w.dtype)
+                        # if bias present and length==out_c, collapse similarly
+                        if module.bias is not None and module.bias.numel() == out_c:
+                            b = module.bias.data.view(obs_in, 3).mean(dim=1)
+                            module.bias.data = b.contiguous().to(device=b.device, dtype=b.dtype)
+                        print(f"[diag] Collapsed output channels of conv '{name}': out {out_c} -> {obs_in}")
+                        adapted.append(name)
+                        continue
+                # Case C: both out_c and in_c are 3x a base and obs_in == base -> collapse both axes
+                if out_c == obs_in * 3 and in_c == obs_in * 3:
+                    with torch.no_grad():
+                        w = module.weight.data
+                        # w.view(out_base,3, in_base,3, kh,kw) -> mean over both 3 axes
+                        out_base = obs_in
+                        in_base = obs_in
+                        new_w = w.view(out_base, 3, in_base, 3, kh, kw).mean(dim=(1,3))  # (out_base, in_base, kh, kw)
+                        module.weight.data = new_w.contiguous().to(device=w.device, dtype=w.dtype)
+                        if module.bias is not None and module.bias.numel() == out_c:
+                            b = module.bias.data.view(out_base, 3).mean(dim=1)
+                            module.bias.data = b.contiguous().to(device=b.device, dtype=b.dtype)
+                        print(f"[diag] Collapsed both axes of conv '{name}': ({out_c},{in_c}) -> ({out_base},{in_base})")
+                        adapted.append(name)
+                        continue
+                # Case D: small off-by k mismatch (e.g. weight.in_c == obs_in + k)
+                # We attempt a conservative slice (drop trailing channels) if k small and user accepts risk.
+                diff = in_c - obs_in
+                if diff > 0 and diff <= 4:
+                    with torch.no_grad():
+                        w = module.weight.data
+                        new_w = w[:, :obs_in, :, :].contiguous()  # drop extra input channels
+                        module.weight.data = new_w.to(device=w.device, dtype=w.dtype)
+                        print(f"[diag] Sliced conv '{name}' input channels {in_c} -> {obs_in} (dropped {diff}).")
+                        adapted.append(name)
+                        continue
+                # otherwise, we do not attempt an unsafe adaptation
+                print(f"[diag] Could not auto-adapt conv '{name}': weight in {in_c}, observed {obs_in}.")
+            except Exception as e:
+                print(f"[diag] Exception while adapting '{name}': {e}")
+                traceback.print_exc(limit=1)
+
+        print("[diag] Adaptation complete. Adapted layers:", adapted)
         return mismatches
 
-    mismatches = find_conv_mismatches(model)
-    print("=== CONV MISMATCHES (weight_in != observed_input_ch) ===")
-    if not mismatches:
-        print("No mismatches found (all conv weights match observed input channels).")
-    else:
-        for m in mismatches:
-            print(m)
-    print("=== END DIAGNOSTIC ===")
+    # Run it
+    mismatches = inspect_and_adapt_model_for_grayscale(model, sample_shape=(1,1,80,80))
+
     # -------------------------------------------------------------------------
 
     #### resume training
