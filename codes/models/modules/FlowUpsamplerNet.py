@@ -115,9 +115,9 @@ class FlowUpsamplerNet(nn.Module):
             # self.arch_preFlow(self.K, LU_decomposed, actnorm_scale, hidden_channels, opt, opt_get)
 
         if opt_get(opt, ['network_G', 'flow', 'split', 'enable']):
-            self.f = f_conv2d_bias(affineInCh, 2 * 3 * 64 // 2 // 2)
+            self.f = f_conv2d_bias(affineInCh, 2 * 64 // 2 // 2)
         else:
-            self.f = f_conv2d_bias(affineInCh, 2 * 3 * 64)
+            self.f = f_conv2d_bias(affineInCh, 2 * 64)
 
         self.H = H
         self.W = W
@@ -132,8 +132,8 @@ class FlowUpsamplerNet(nn.Module):
     def arch_level_conditional(self, H, W, opt, opt_get):
         levelConditionalOpt = opt_get(opt, ['network_G', 'flow', 'levelConditional'])
         if levelConditionalOpt is not None and levelConditionalOpt['type'] == 'rgb':
-            self.layers.append(BypassSplit(n_split=3))
-            self.C = self.C + 3
+            self.layers.append(BypassSplit(n_split=1))
+            self.C = self.C + 1
             self.output_shapes.append([-1, self.C, H, W])
 
     def arch_FlowStep(self, H, K, LU_decomposed, W, actnorm_scale, affineInCh, flow_coupling, flow_permutation,
@@ -502,7 +502,7 @@ class FlowUpsamplerNet(nn.Module):
 
         # debug.imwrite("sr", sr)
 
-        assert sr.shape[1] == 3
+        assert sr.shape[1] == 1
         return sr, logdet
 
     def forward_affine_image_injector_reverse(self, fl_fea, layer, rrdbResults):
