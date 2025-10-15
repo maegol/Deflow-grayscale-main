@@ -36,7 +36,7 @@ class RRDBGlowNet(nn.Module):
             self.set_rrdb_training(True)
 
         self.flowUpsamplerNet = \
-            FlowUpsamplerNet((160, 160, 3), hidden_channels, K,
+            FlowUpsamplerNet((160, 160, 1), hidden_channels, K,
                              flow_coupling=opt['network_G']['flow']['coupling'],
                              LU_decomposed=opt_get(self.opt, ['network_G', 'flow', 'LU_decomposed'], False),
                              opt=opt)
@@ -47,7 +47,7 @@ class RRDBGlowNet(nn.Module):
         else:
             L = opt_get(self.opt, ['network_G', 'flow', 'L']) or 3
             fac = 2 ** (L - 3)
-            C = 3 * 8 * 8 * fac * fac
+            C =  8 * 8 * fac * fac
 
         self.I = torch.nn.Parameter(torch.eye(C, requires_grad=False), requires_grad=False)
 
