@@ -40,97 +40,123 @@ class Split2d(nn.Module):
 
     def split2d_prior(self, z, ft=None):
         """
-        Original behavior: compute prior for split by running a conv over z (or z+ft).
-        This version is robust: if self.conv expects a different number of input channels
-        than z has, it will rebuild self.conv so it matches z.shape[1], move it to z.device,
-        and continue. This prevents "expected input X channels but got Y" runtime errors.
+        Robust split-prior computation:
+        - compute runtime split (z1, z2) from input z
+        - build prior input from z1 (+ ft if applicable)
+        - ensure self.conv has in_channels == prior_in.shape[1] and
+          out_channels == z2.shape[1] * 2; rebuild if necessary
+        - compute h = self.conv(prior_in) and return mean, logs (each with channels == z2.shape[1])
         """
-        # If ft is concatenated before conv in your original code, adapt accordingly.
-        # Many implementations do `z = torch.cat([z, ft], dim=1)` if ft is provided.
-        # We'll keep the original semantics: if ft is not None and position is not None, concat.
-        if ft is not None and getattr(self, 'position', None) is not None:
-            # ensure same spatial size
-            if ft.shape[2:] != z.shape[2:]:
-                ft = torch.nn.functional.interpolate(ft, size=z.shape[2:], mode='bilinear', align_corners=False)
-            z_in = torch.cat([z, ft], dim=1)
+        # 1) compute z1, z2 using runtime-safe split logic (mirrors split_ratio)
+        in_ch = int(z.shape[1])
+        nominal_pass = getattr(self, 'num_channels_pass', None)
+        if nominal_pass is None:
+            nominal_pass = in_ch // 2
+
+        if nominal_pass >= in_ch:
+            fallback_pass = in_ch // 2
+            if fallback_pass == 0:
+                raise RuntimeError(f"Split2d: cannot split tensor with {in_ch} channel(s).")
+            num_pass = fallback_pass
+            print(f"[WARN] Split2d.split2d_prior: nominal num_channels_pass={nominal_pass} >= in_ch={in_ch}. "
+                f"Falling back to num_pass={num_pass}.")
         else:
-            z_in = z
+            num_pass = nominal_pass
+            if num_pass == in_ch:
+                num_pass = in_ch // 2
+                print(f"[WARN] Split2d.split2d_prior: adjusted num_pass to {num_pass} to avoid empty z2.")
 
-        # --- safety check: rebuild conv if its expected in_channels != runtime channels ---
+        z1 = z[:, :num_pass]
+        z2 = z[:, num_pass:]
+
+        # 2) build prior input: usually z1 concatenated with ft (if ft and layer expects it)
+        if ft is not None and getattr(self, 'position', None) is not None:
+            # ensure ft spatial size matches z1
+            if ft.shape[2:] != z1.shape[2:]:
+                ft = torch.nn.functional.interpolate(ft, size=z1.shape[2:], mode='bilinear', align_corners=False)
+            prior_in = torch.cat([z1, ft], dim=1)
+        else:
+            prior_in = z1
+
+        # 3) desired conv output must produce channels == z2.channels * 2 (for mean+logs via split)
+        desired_out_ch = int(z2.shape[1]) * 2
+        runtime_in_ch = int(prior_in.shape[1])
+
+        # 4) check current conv shapes (best-effort)
         try:
-            conv_in_channels = getattr(self.conv, 'in_channels', None)
-            if conv_in_channels is None:
-                # fallback to reading weight shape
-                conv_in_channels = self.conv.weight.shape[1]
+            conv_in_ch = getattr(self.conv, 'in_channels', None)
+            if conv_in_ch is None:
+                conv_in_ch = self.conv.weight.shape[1]
         except Exception:
-            conv_in_channels = None
+            conv_in_ch = None
 
-        runtime_in_channels = int(z_in.shape[1])
+        try:
+            conv_out_ch = getattr(self.conv, 'out_channels', None)
+            if conv_out_ch is None:
+                conv_out_ch = self.conv.weight.shape[0]
+        except Exception:
+            conv_out_ch = None
 
-        if conv_in_channels is None or conv_in_channels != runtime_in_channels:
-            # Rebuild conv to accept runtime_in_channels while preserving out_channels & kernel size if possible
-            out_ch = None
+        # 5) If conv shapes don't match runtime needs, rebuild it to match runtime sizes
+        if conv_in_ch != runtime_in_ch or conv_out_ch != desired_out_ch:
+            # try to reuse original conv class if present
+            ConvCls = self.conv.__class__ if hasattr(self, 'conv') and self.conv is not None else None
+            device = prior_in.device
+            dtype = prior_in.dtype
+
+            # Try to infer kernel size from existing conv if possible
             kH = kW = 3
             try:
                 w = self.conv.weight
-                out_ch = w.shape[0]
                 kH, kW = w.shape[2], w.shape[3]
             except Exception:
-                # fallback defaults
-                out_ch = getattr(self.conv, 'out_channels', None) or getattr(self, 'out_ch', None) or runtime_in_channels
+                pass
 
-            # Attempt to recreate using the same class as the original conv (best-effort)
             new_conv = None
-            ConvCls = self.conv.__class__ if hasattr(self.conv, '__class__') else None
-            device = z_in.device
-            dtype = z_in.dtype
-
-            # Try to construct a new conv with the same class signature ConvCls(in_ch, out_ch, kernel_size=[kH,kW])
             if ConvCls is not None:
+                # try to instantiate with the common repo signature
                 try:
-                    # many custom Conv2d in this repo accept list kernel_size param like [kH,kW]
-                    new_conv = ConvCls(runtime_in_channels, out_ch, kernel_size=[kH, kW])
+                    new_conv = ConvCls(runtime_in_ch, desired_out_ch, kernel_size=[kH, kW])
                 except Exception:
                     try:
-                        # fallback to common torch.nn.Conv2d signature
-                        new_conv = torch.nn.Conv2d(runtime_in_channels, out_ch, kernel_size=(kH, kW), padding=(kH//2, kW//2))
+                        # fallback to torch.nn.Conv2d
+                        new_conv = torch.nn.Conv2d(runtime_in_ch, desired_out_ch, kernel_size=(kH, kW),
+                                               padding=(kH // 2, kW // 2))
                     except Exception:
                         new_conv = None
-
             else:
-                # fallback to torch.nn.Conv2d
                 try:
-                    new_conv = torch.nn.Conv2d(runtime_in_channels, out_ch, kernel_size=(kH, kW), padding=(kH//2, kW//2))
+                    new_conv = torch.nn.Conv2d(runtime_in_ch, desired_out_ch, kernel_size=(kH, kW),
+                                           padding=(kH // 2, kW // 2))
                 except Exception:
                     new_conv = None
 
             if new_conv is None:
-                raise RuntimeError(f"Could not recreate conv for Split2d: found conv class {ConvCls}, out_ch={out_ch}, kernel=({kH},{kW})")
+                raise RuntimeError(f"Split2d: could not rebuild conv for prior (in_ch={runtime_in_ch}, out_ch={desired_out_ch}).")
 
-            # Move to same device/dtype as input
+            # move to correct device/dtype
             try:
                 new_conv.to(device=device, dtype=dtype)
             except Exception:
                 new_conv.to(device)
 
-            # Replace the conv in the module so parameters are registered
+            # replace and register
             self.conv = new_conv
+            print(f"[WARN] Split2d: rebuilt prior conv -> in_ch={runtime_in_ch}, out_ch={desired_out_ch}, kernel=({kH},{kW}), device={device}")
 
-            # Log so you can see mismatches happening in training
-            print(f"[WARN] Split2d: rebuilt conv to accept in_channels={runtime_in_channels} "
-                f"(was {conv_in_channels}). out_channels={out_ch}, kernel=({kH},{kW}). Device={device}.")
-
-        # Now safely call the conv with z_in (the new conv expects runtime_in_channels)
-        h = self.conv(z_in)
-
-        # The rest of your original split2d_prior should follow here:
-        # usually from original code:
-        # mean, logs = thops.split_feature(h, "split") or similar
-        # return mean, logs
-        # ----- Replace the next lines with the original post-conv operations -----
-        # Example generic continuation (adjust to your original function):
+        # 6) compute prior and split into mean/logs
+        h = self.conv(prior_in)
         mean, logs = thops.split_feature(h, "split")
+
+        # final sanity: mean/logs channels should match z2 channels
+        if mean.shape[1] != z2.shape[1] or logs.shape[1] != z2.shape[1]:
+            raise AssertionError(
+                f"Split2d: prior produced mean/logs channels ({mean.shape[1]},{logs.shape[1]}) "
+                f"but z2 channels = {z2.shape[1]}"
+            )
+
         return mean, logs
+
 
 
     def exp_eps(self, logs):
