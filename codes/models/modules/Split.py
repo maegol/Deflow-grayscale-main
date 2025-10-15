@@ -210,5 +210,37 @@ class Split2d(nn.Module):
             return z, logdet
 
     def split_ratio(self, input):
-        z1, z2 = input[:, :self.num_channels_pass, ...], input[:, self.num_channels_pass:, ...]
+        #z1, z2 = input[:, :self.num_channels_pass, ...], input[:, self.num_channels_pass:, ...]
+        # ---- begin replacement ----
+        # determine runtime input channels
+        in_ch = int(z.shape[1])
+        # original intended number of channels to pass (may have been set at init)
+        nominal_pass = getattr(self, 'num_channels_pass', None)
+
+        # If not set, default to half
+        if nominal_pass is None:
+            nominal_pass = in_ch // 2
+
+        # Clamp nominal_pass to be <= in_ch
+        if nominal_pass >= in_ch:
+            # warn about mismatch and fallback to half-split, ensuring z2 non-empty if possible
+            fallback_pass = in_ch // 2
+            if fallback_pass == 0:
+                raise RuntimeError(f"Split2d: cannot split tensor with {in_ch} channel(s). "
+                                "Upstream produced too few channels for splitting.")
+            print(f"[WARN] Split2d: nominal num_channels_pass={nominal_pass} > runtime in_ch={in_ch}. "
+                f"Falling back to half-split num_pass={fallback_pass}.")
+            num_pass = fallback_pass
+        else:
+            # Prefer nominal_pass but ensure z2 won't be empty
+            num_pass = nominal_pass
+            if num_pass == in_ch:
+                num_pass = in_ch // 2
+                print(f"[WARN] Split2d: adjusted num_pass to {num_pass} to avoid empty z2 (runtime in_ch={in_ch}).")
+
+        # Now safe split
+        z1 = z[:, :num_pass]
+        z2 = z[:, num_pass:]
+        # ---- end replacement ----
+
         return z1, z2
