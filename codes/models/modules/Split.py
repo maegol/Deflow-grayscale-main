@@ -148,7 +148,14 @@ class Split2d(nn.Module):
         h = self.conv(prior_in)
         mean, logs = thops.split_feature(h, "split")
 
-        # final sanity: mean/logs channels should match z2 channels
+        # --- defensive spatial alignment ---
+        if mean.shape[2:] != z2.shape[2:]:
+            target_size = (z2.shape[2], z2.shape[3])
+            mean = torch.nn.functional.interpolate(mean, size=target_size, mode='bilinear', align_corners=False)
+            logs = torch.nn.functional.interpolate(logs, size=target_size, mode='bilinear', align_corners=False)
+            print(f"[WARN] Split2d: interpolated prior mean/logs from spatial {h.shape[2:]} -> {target_size} to match z2.")
+
+        # final sanity check
         if mean.shape[1] != z2.shape[1] or logs.shape[1] != z2.shape[1]:
             raise AssertionError(
                 f"Split2d: prior produced mean/logs channels ({mean.shape[1]},{logs.shape[1]}) "
@@ -156,6 +163,7 @@ class Split2d(nn.Module):
             )
 
         return mean, logs
+
 
 
 
