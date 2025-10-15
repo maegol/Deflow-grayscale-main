@@ -985,6 +985,29 @@ class CondAffineSeparatedAndCond(nn.Module):
         Consistent logdet helper used in other classes.
         """
         return thops.sum(torch.log(scale), dim=[1, 2, 3])
+    
+    
+    def split(self, z):
+        """
+        Split z into z1 (channels_for_nn) and z2 (rest).
+        Lazily initialize channel counts if necessary.
+        """
+        # ensure channel counts are available
+        if self.channels_for_nn is None or self.channels_for_co is None:
+            # if somehow split is called before lazy init, derive from runtime z
+            # this mirrors the lazy-init behavior: prefer half/half split
+            self.in_channels = int(z.shape[1])
+            self.channels_for_nn = self.in_channels // 2
+            self.channels_for_co = self.in_channels - self.channels_for_nn
+
+        z1 = z[:, :self.channels_for_nn]
+        z2 = z[:, self.channels_for_nn:]
+        # sanity check
+        assert z1.shape[1] + z2.shape[1] == z.shape[1], (
+            f"Split mismatch: z.shape[1]={z.shape[1]}, "
+            f"z1={z1.shape[1]}, z2={z2.shape[1]}"
+        )
+        return z1, z2
 
     # ------------------------------------------------------------------
     def _lazy_init_with(self, z, ft):
