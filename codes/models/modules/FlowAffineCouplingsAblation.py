@@ -1012,35 +1012,30 @@ class CondAffineSeparatedAndCond(nn.Module):
     # ------------------------------------------------------------------
     def _lazy_init_with(self, z, ft):
         """
-        Initialize fAffine and fFeatures based on actual incoming tensor shapes.
-        Called on the first forward pass (or whenever shapes change).
+        Lazy init fAffine and fFeatures using runtime shapes, and move them to the same device/dtype
+        as the runtime input tensor `z` to avoid CPU/CUDA dtype-device mismatch errors.
         """
         # actual input channels
         actual_in_ch = int(z.shape[1])
         self.in_channels = actual_in_ch
 
-        # derive split: default to half/half (same behavior as original)
+        # derive split (half/half)
         self.channels_for_nn = self.in_channels // 2
         self.channels_for_co = self.in_channels - self.channels_for_nn
 
-        # validate rrdb feature channels from ft if provided
+        # determine rrdb channels from ft if provided
         if ft is not None:
-            actual_ft_ch = int(ft.shape[1])  # assume ft is tensor with shape [B,C,H,W]
-            # if config gives in_channels_rrdb but it doesn't match ft, warn and prefer ft shape
+            actual_ft_ch = int(ft.shape[1])
             if self.in_channels_rrdb and self.in_channels_rrdb != actual_ft_ch:
                 print(f"[WARN] CondAffineSeparatedAndCond: opt in_channels_rrdb={self.in_channels_rrdb} "
-                      f"!= runtime ft channels={actual_ft_ch}. Using runtime ft channels.")
+                    f"!= runtime ft channels={actual_ft_ch}. Using runtime ft channels.")
             self.in_channels_rrdb = actual_ft_ch
         else:
-            # no ft provided: keep whatever config had (could be 0)
-            if self.in_channels_rrdb == 0:
-                # not ideal — but allow it: fFeatures will be created with in_channels=0
-                pass
+            # if ft is None and config didn't set rrdb channels, keep whatever in_channels_rrdb is (maybe 0)
+            pass
 
-        # create fAffine and fFeatures matching the derived sizes
-        # Note: self.F should be set in the class scope usage (original code used self.F)
-        # Keep same hidden / kernel settings as original
-        self.fAffine = self.F(
+        # create the modules (they are created on current default device - usually CPU)
+        fAffine = self.F(
             in_channels=self.channels_for_nn + self.in_channels_rrdb,
             out_channels=self.channels_for_co * 2,
             hidden_channels=self.hidden_channels,
@@ -1048,13 +1043,34 @@ class CondAffineSeparatedAndCond(nn.Module):
             n_hidden_layers=self.n_hidden_layers
         )
 
-        self.fFeatures = self.F(
+        fFeatures = self.F(
             in_channels=self.in_channels_rrdb,
             out_channels=self.in_channels * 2,
             hidden_channels=self.hidden_channels,
             kernel_hidden=self.kernel_hidden,
             n_hidden_layers=self.n_hidden_layers
         )
+
+        # Move modules to the same device and dtype as the runtime input
+        device = z.device
+        dtype = z.dtype
+        # register first (assignment registers them)
+        self.fAffine = fAffine
+        self.fFeatures = fFeatures
+        # then move
+        try:
+            # this moves all parameters/buffers into target device/dtype
+            self.fAffine.to(device=device, dtype=dtype)
+            self.fFeatures.to(device=device, dtype=dtype)
+        except Exception:
+            # best-effort: if dtype-moving fails (old torch), at least move device
+            self.fAffine.to(device)
+            self.fFeatures.to(device)
+
+    # optional: print debug info
+    # print(f"[DEBUG] Lazy-initialized CondAffineSeparatedAndCond on device={device}, dtype={dtype}, "
+    #       f"in_ch={self.in_channels}, rrdb_ch={self.in_channels_rrdb}, nn={self.channels_for_nn}, co={self.channels_for_co}")
+
 
     def forward(self, input: torch.Tensor, logdet=None, reverse=False, ft=None):
 
