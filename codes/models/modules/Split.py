@@ -209,38 +209,49 @@ class Split2d(nn.Module):
 
             return z, logdet
 
-    def split_ratio(self, input):
-        #z1, z2 = input[:, :self.num_channels_pass, ...], input[:, self.num_channels_pass:, ...]
-        # ---- begin replacement ----
-        # determine runtime input channels
-        in_ch = int(z.shape[1])
-        # original intended number of channels to pass (may have been set at init)
-        nominal_pass = getattr(self, 'num_channels_pass', None)
+def split_ratio(self, input):
+    """
+    Robust splitting by runtime channel count. Uses `self.num_channels_pass` if set,
+    otherwise falls back to a half-split. Ensures z2 is not empty and prints warnings
+    when a fallback/adjustment happens.
+    """
+    # runtime input channels
+    in_ch = int(input.shape[1])
 
-        # If not set, default to half
-        if nominal_pass is None:
-            nominal_pass = in_ch // 2
+    # nominal intended number of channels to pass (may be set at init)
+    nominal_pass = getattr(self, 'num_channels_pass', None)
 
-        # Clamp nominal_pass to be <= in_ch
-        if nominal_pass >= in_ch:
-            # warn about mismatch and fallback to half-split, ensuring z2 non-empty if possible
-            fallback_pass = in_ch // 2
-            if fallback_pass == 0:
-                raise RuntimeError(f"Split2d: cannot split tensor with {in_ch} channel(s). "
-                                "Upstream produced too few channels for splitting.")
-            print(f"[WARN] Split2d: nominal num_channels_pass={nominal_pass} > runtime in_ch={in_ch}. "
-                f"Falling back to half-split num_pass={fallback_pass}.")
-            num_pass = fallback_pass
-        else:
-            # Prefer nominal_pass but ensure z2 won't be empty
-            num_pass = nominal_pass
-            if num_pass == in_ch:
-                num_pass = in_ch // 2
-                print(f"[WARN] Split2d: adjusted num_pass to {num_pass} to avoid empty z2 (runtime in_ch={in_ch}).")
+    # default to half if not provided
+    if nominal_pass is None:
+        nominal_pass = in_ch // 2
 
-        # Now safe split
-        z1 = z[:, :num_pass]
-        z2 = z[:, num_pass:]
-        # ---- end replacement ----
+    # clamp/adjust to avoid empty slices
+    if nominal_pass >= in_ch:
+        fallback_pass = in_ch // 2
+        if fallback_pass == 0:
+            # cannot reasonably split a single-channel tensor in this design
+            raise RuntimeError(
+                f"Split2d: cannot split tensor with {in_ch} channel(s). "
+                "Upstream produced too few channels for splitting."
+            )
+        print(f"[WARN] Split2d: nominal num_channels_pass={nominal_pass} >= runtime in_ch={in_ch}. "
+              f"Falling back to half-split num_pass={fallback_pass}.")
+        num_pass = fallback_pass
+    else:
+        num_pass = nominal_pass
+        if num_pass == in_ch:
+            # avoid producing empty z2
+            num_pass = in_ch // 2
+            print(f"[WARN] Split2d: adjusted num_pass to {num_pass} to avoid empty z2 (runtime in_ch={in_ch}).")
 
-        return z1, z2
+    # perform split using the resolved num_pass
+    z1 = input[:, :num_pass]
+    z2 = input[:, num_pass:]
+
+    # sanity check
+    if z1.shape[1] + z2.shape[1] != in_ch:
+        raise RuntimeError(
+            f"Split2d split failed: in_ch={in_ch}, z1={z1.shape[1]}, z2={z2.shape[1]}"
+        )
+
+    return z1, z2
