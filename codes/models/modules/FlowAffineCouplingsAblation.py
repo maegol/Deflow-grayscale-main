@@ -918,6 +918,75 @@ class CondAffineSeparatedAndCond(nn.Module):
         self.channels_for_nn = None
         self.channels_for_co = None
 
+    # ------------------------------------------------------------------
+    # Helper factory and feature-extractors (add these inside the class)
+    # ------------------------------------------------------------------
+    def F(self, in_channels, out_channels, hidden_channels, kernel_hidden=1, n_hidden_layers=1):
+        """
+        Same factory used elsewhere in this file: conv -> ReLU -> (hidden convs) -> Conv2dZeros.
+        Returns nn.Sequential mapping (N,in_channels,H,W)->(N,out_channels,H,W).
+        """
+        layers = [Conv2d(in_channels, hidden_channels), nn.ReLU(inplace=False)]
+
+        for _ in range(n_hidden_layers):
+            layers.append(Conv2d(hidden_channels, hidden_channels, kernel_size=[kernel_hidden, kernel_hidden]))
+            layers.append(nn.ReLU(inplace=False))
+        layers.append(Conv2dZeros(hidden_channels, out_channels))
+
+        return nn.Sequential(*layers)
+
+    def feature_extract(self, z, f):
+        """
+        Generic feature extractor used for fFeatures (ft-only) in other classes.
+        If f is None, return identity-like scale=1 and shift=0 (no-op).
+        """
+        if f is None:
+            # create scale=ones and shift=zeros to be shape-compatible with z
+            B, C, H, W = z.shape
+            scale = torch.ones((B, C, H, W), device=z.device, dtype=z.dtype)
+            shift = torch.zeros((B, C, H, W), device=z.device, dtype=z.dtype)
+            return scale, shift
+
+        h = f(z)
+        shift, scale = thops.split_feature(h, "cross")
+        scale = (torch.sigmoid(scale + 2.) + self.affine_eps)
+        return scale, shift
+
+    def feature_extract_aff(self, z1, ft, f):
+        """
+        fAffine in this class expects concatenated [z1, ft] as input (matches original design).
+        If ft is None but f expects it, we still call f with z1 (best-effort).
+        """
+        if f is None:
+            # no affine net: return neutral scale and zero shift sized like z1
+            B, C, H, W = z1.shape
+            scale = torch.ones((B, C, H, W), device=z1.device, dtype=z1.dtype)
+            shift = torch.zeros((B, C, H, W), device=z1.device, dtype=z1.dtype)
+            return scale, shift
+
+        if ft is None:
+            # If ft not provided, fall back to applying f on z1 only (some variants use this)
+            h = f(z1)
+        else:
+            # concatenate along channel dim (same pattern used in original code)
+            # make sure spatial sizes match
+            if ft.shape[2:] != z1.shape[2:]:
+                # interpolate ft to z1 spatial size (safe fallback)
+                ft = torch.nn.functional.interpolate(ft, size=z1.shape[2:], mode='bilinear', align_corners=False)
+            z = torch.cat([z1, ft], dim=1)
+            h = f(z)
+
+        shift, scale = thops.split_feature(h, "cross")
+        scale = (torch.sigmoid(scale + 2.) + self.affine_eps)
+        return scale, shift
+
+    def get_logdet(self, scale):
+        """
+        Consistent logdet helper used in other classes.
+        """
+        return thops.sum(torch.log(scale), dim=[1, 2, 3])
+
+    # ------------------------------------------------------------------
     def _lazy_init_with(self, z, ft):
         """
         Initialize fAffine and fFeatures based on actual incoming tensor shapes.
