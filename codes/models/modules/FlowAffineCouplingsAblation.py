@@ -41,46 +41,85 @@ class CondAffineCatAblation(nn.Module):
                         kernel_hidden=self.kernel_hidden,
                         n_hidden_layers=self.n_hidden_layers)
 
+  # In the CondAffineCatSymmetricAndSep class in FlowAffineCouplingsAblation.py
+
     def forward(self, input: torch.Tensor, logdet=None, reverse=False, ft=None):
-        import torch.nn.functional as F
+        # Import the necessary function at the top of your file:
+        # import torch.nn.functional as F
+        
         if not reverse:
             z = input
             assert z.shape[1] == self.in_channels, (z.shape[1], self.in_channels)
-            z1, z2 = self.split(z)
-            scale, shift = self.feature_extract(z1, ft)
 
+            # --- START: MODIFICATION FOR FORWARD PASS ---
+            # Feature Conditional
+            scaleFt, shiftFt = self.feature_extract_ft(ft, self.fFeatures)
+            
             # Get the target H, W from the z tensor
             target_size = z.shape[2:] 
-          
+            
             # Resize scaleFt and shiftFt to match z's spatial dimensions
-            scaleFt_resized = F.interpolate(shift, size=target_size, mode='bilinear', align_corners=False)
-            shiftFt_resized = F.interpolate(scale, size=target_size, mode='bilinear', align_corners=False)
+            scaleFt_resized = F.interpolate(scaleFt, size=target_size, mode='bilinear', align_corners=False)
+            shiftFt_resized = F.interpolate(shiftFt, size=target_size, mode='bilinear', align_corners=False)
 
             z = z + shiftFt_resized
             z = z * scaleFt_resized
-            '''
-            z2 = z2 + shift
-            z2 = z2 * scale
-            '''
-            logdet = self.get_logdet(logdet, scale)
-            z = thops.cat_feature(z1, z2)
+            logdet = logdet + self.get_logdet(scaleFt_resized)
+            # --- END: MODIFICATION FOR FORWARD PASS ---
+
+            z1bypass, z1trans = self.split(z)
+            scale, shift = self.feature_extract(z1bypass, ft, self.f1)
+            self.asserts(scale, shift, z1bypass, z1trans)
+            z1trans = z1trans + shift
+            z1trans = z1trans * scale
+            logdet = logdet + self.get_logdet(scale)
+            z = thops.cat_feature(z1bypass, z1trans)
+
+            z2trans, z2bypass = self.split(z)  # different order
+            scale2, shift2 = self.feature_extract(z2bypass, ft, self.f2)
+            self.asserts(scale2, shift2, z2bypass, z2trans)
+            z2trans = z2trans + shift2
+            z2trans = z2trans * scale2
+            logdet = logdet + self.get_logdet(scale2)
+            z = thops.cat_feature(z2trans, z2bypass)
+
             output = z
-        else:
+        else: # reverse=True
             z = input
-            z1, z2 = self.split(z)
-            scale, shift = self.feature_extract(z1, ft)
-            # Resize scaleFt and shiftFt to match z's spatial dimensions
-            scaleFt_resized = F.interpolate(shift, size=target_size, mode='bilinear', align_corners=False)
-            shiftFt_resized = F.interpolate(scale, size=target_size, mode='bilinear', align_corners=False)
 
-            z = z + shiftFt_resized
-            z = z * scaleFt_resized
-            '''
-            z2 = z2 / scale
-            z2 = z2 - shift
-            '''
-            logdet = -self.get_logdet(logdet, scale)
-            z = thops.cat_feature(z1, z2)
+            z2trans, z2bypass = self.split(z)  # different order
+            scale2, shift2 = self.feature_extract(z2bypass, ft, self.f2)
+            self.asserts(scale2, shift2, z2bypass, z2trans)
+            z2trans = z2trans / scale2
+            z2trans = z2trans - shift2
+            z = thops.cat_feature(z2trans, z2bypass)
+            logdet = logdet - self.get_logdet(scale2)
+
+            z1bypass, z1trans = self.split(z)
+            scale, shift = self.feature_extract(z1bypass, ft, self.f1)
+            self.asserts(scale, shift, z1bypass, z1trans)
+            z1trans = z1trans / scale
+            z1trans = z1trans - shift
+            z = thops.cat_feature(z1bypass, z1trans)
+            logdet = logdet - self.get_logdet(scale)
+
+            # --- START: MODIFICATION FOR REVERSE PASS ---
+            # Feature Conditional
+            scaleFt, shiftFt = self.feature_extract_ft(ft, self.fFeatures)
+            
+            # Get the target H, W from the z tensor
+            target_size = z.shape[2:] 
+            
+            # Resize scaleFt and shiftFt to match z's spatial dimensions
+            scaleFt_resized = F.interpolate(scaleFt, size=target_size, mode='bilinear', align_corners=False)
+            shiftFt_resized = F.interpolate(shiftFt, size=target_size, mode='bilinear', align_corners=False)
+
+            # Now use the RESIZED tensors for the operation
+            z = z / scaleFt_resized
+            z = z - shiftFt_resized
+            logdet = logdet - self.get_logdet(scaleFt_resized)
+            # --- END: MODIFICATION FOR REVERSE PASS ---
+
             output = z
         return output, logdet
         
