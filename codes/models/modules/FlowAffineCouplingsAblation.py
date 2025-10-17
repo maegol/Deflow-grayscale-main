@@ -42,17 +42,26 @@ class CondAffineCatAblation(nn.Module):
                         n_hidden_layers=self.n_hidden_layers)
 
     def forward(self, input: torch.Tensor, logdet=None, reverse=False, ft=None):
+        import torch.nn.functional as F
         if not reverse:
             z = input
             assert z.shape[1] == self.in_channels, (z.shape[1], self.in_channels)
             z1, z2 = self.split(z)
             scale, shift = self.feature_extract(z1, ft)
 
-            self.asserts(scale, shift, z1, z2)
+            # Get the target H, W from the z tensor
+            target_size = z.shape[2:] 
+          
+            # Resize scaleFt and shiftFt to match z's spatial dimensions
+            scaleFt_resized = F.interpolate(shift, size=target_size, mode='bilinear', align_corners=False)
+            shiftFt_resized = F.interpolate(scale, size=target_size, mode='bilinear', align_corners=False)
 
+            z = z + shiftFt_resized
+            z = z * scaleFt_resized
+            '''
             z2 = z2 + shift
             z2 = z2 * scale
-
+            '''
             logdet = self.get_logdet(logdet, scale)
             z = thops.cat_feature(z1, z2)
             output = z
@@ -60,14 +69,22 @@ class CondAffineCatAblation(nn.Module):
             z = input
             z1, z2 = self.split(z)
             scale, shift = self.feature_extract(z1, ft)
+            # Resize scaleFt and shiftFt to match z's spatial dimensions
+            scaleFt_resized = F.interpolate(shift, size=target_size, mode='bilinear', align_corners=False)
+            shiftFt_resized = F.interpolate(scale, size=target_size, mode='bilinear', align_corners=False)
 
+            z = z + shiftFt_resized
+            z = z * scaleFt_resized
+            '''
             z2 = z2 / scale
             z2 = z2 - shift
-
+            '''
             logdet = -self.get_logdet(logdet, scale)
             z = thops.cat_feature(z1, z2)
             output = z
         return output, logdet
+        
+    
 
     def asserts(self, scale, shift, z1, z2):
         assert z1.shape[1] == self.channels_for_nn, (z1.shape[1], self.channels_for_nn)
