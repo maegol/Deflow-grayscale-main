@@ -4,7 +4,7 @@ from torch import nn as nn
 from models.modules import thops
 from models.modules.flow import Conv2d, Conv2dZeros
 from utils.util import opt_get
-
+import torch.nn.functional as F
 
 def affine(x, scale, shift, reverse):
     if not reverse:
@@ -291,13 +291,25 @@ class CondAffineCatSymmetric(nn.Module):
                          kernel_hidden=self.kernel_hidden,
                          n_hidden_layers=self.n_hidden_layers)
 
+    # In CondAffineCatSymmetric class...
+
     def forward(self, input: torch.Tensor, logdet=None, reverse=False, ft=None):
+        # Don't forget: import torch.nn.functional as F at the top of the file
+        
         if not reverse:
             z = input
             assert z.shape[1] == self.in_channels, (z.shape[1], self.in_channels)
 
             z1bypass, z1trans = self.split(z)
             scale, shift = self.feature_extract(z1bypass, ft, self.f1)
+            
+            # --- START FIX 1 ---
+            # Resize scale/shift to match the tensor they will be applied to (z1trans)
+            target_size_1 = z1trans.shape[2:]
+            scale = F.interpolate(scale, size=target_size_1, mode='bilinear', align_corners=False)
+            shift = F.interpolate(shift, size=target_size_1, mode='bilinear', align_corners=False)
+            # --- END FIX 1 ---
+
             self.asserts(scale, shift, z1bypass, z1trans)
             z1trans = z1trans + shift
             z1trans = z1trans * scale
@@ -306,6 +318,14 @@ class CondAffineCatSymmetric(nn.Module):
 
             z2trans, z2bypass = self.split(z)  # different order
             scale2, shift2 = self.feature_extract(z2bypass, ft, self.f2)
+
+            # --- START FIX 2 ---
+            # Resize scale2/shift2 to match the tensor they will be applied to (z2trans)
+            target_size_2 = z2trans.shape[2:]
+            scale2 = F.interpolate(scale2, size=target_size_2, mode='bilinear', align_corners=False)
+            shift2 = F.interpolate(shift2, size=target_size_2, mode='bilinear', align_corners=False)
+            # --- END FIX 2 ---
+
             self.asserts(scale2, shift2, z2bypass, z2trans)
             z2trans = z2trans + shift2
             z2trans = z2trans * scale2
@@ -319,6 +339,13 @@ class CondAffineCatSymmetric(nn.Module):
 
             z2trans, z2bypass = self.split(z)  # different order
             scale2, shift2 = self.feature_extract(z2bypass, ft, self.f2)
+
+            # --- START FIX 3 (REVERSE) ---
+            target_size_2_rev = z2trans.shape[2:]
+            scale2 = F.interpolate(scale2, size=target_size_2_rev, mode='bilinear', align_corners=False)
+            shift2 = F.interpolate(shift2, size=target_size_2_rev, mode='bilinear', align_corners=False)
+            # --- END FIX 3 (REVERSE) ---
+            
             self.asserts(scale2, shift2, z2bypass, z2trans)
             z2trans = z2trans / scale2
             z2trans = z2trans - shift2
@@ -327,6 +354,13 @@ class CondAffineCatSymmetric(nn.Module):
 
             z1bypass, z1trans = self.split(z)
             scale, shift = self.feature_extract(z1bypass, ft, self.f1)
+
+            # --- START FIX 4 (REVERSE) ---
+            target_size_1_rev = z1trans.shape[2:]
+            scale = F.interpolate(scale, size=target_size_1_rev, mode='bilinear', align_corners=False)
+            shift = F.interpolate(shift, size=target_size_1_rev, mode='bilinear', align_corners=False)
+            # --- END FIX 4 (REVERSE) ---
+
             self.asserts(scale, shift, z1bypass, z1trans)
             z1trans = z1trans / scale
             z1trans = z1trans - shift
